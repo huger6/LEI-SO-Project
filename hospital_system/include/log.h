@@ -32,7 +32,7 @@ typedef struct {
 } critical_log_shm_t;
 
 
-int init_logging(const char *filepath);
+int init_logging(const char *filepath, critical_log_shm_t *shm_ptr);
 void close_logging();
 void log_event(log_severity_t severity, const char *component, const char *event_type, const char *details);
 

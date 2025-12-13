@@ -54,10 +54,11 @@ typedef struct {
 } system_config_t;
 
 
-int load_config(const char *filename, system_config_t *config);
-int parse_config_line(char *line, config_param_t *param);
-int validate_config(system_config_t *config);
+// --- Function Headers ---
 
+int load_config(const char *filename, system_config_t *config);
 void print_configs(system_config_t *config);
+void init_default_config(system_config_t *config);
+
 
 #endif

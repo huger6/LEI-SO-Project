@@ -6,9 +6,9 @@
 
 // IPC Keys
 #define FTOK_PATH "/tmp"
-#define MQ_URGENT_KEY 'U'
-#define MQ_NORMAL_KEY 'N'
-#define MQ_RESP_KEY   'R'
+#define MQ_URGENT_KEY 'U' // Urgent messages (surgeries, critical emergencies)
+#define MQ_NORMAL_KEY 'N' // Normal messages
+#define MQ_RESP_KEY   'R' // Responses and notifications
 
 // Message Types
 #define MSG_NEW_EMERGENCY       1
@@ -36,14 +36,6 @@
 #define PIPE_PHARMACY "pharmacy_pipe"
 #define PIPE_LAB      "lab_pipe"
 
-// Semaphores
-#define SEM_BO1       "/sem_surgery_bo1"
-#define SEM_BO2       "/sem_surgery_bo2"
-#define SEM_BO3       "/sem_surgery_bo3"
-#define SEM_TEAMS     "/sem_medical_teams"
-#define SEM_LAB1      "/sem_lab1_equipment"
-#define SEM_LAB2      "/sem_lab2_equipment"
-#define SEM_PHARM     "/sem_pharmacy_access"
 
 // Message Queue structure
 typedef struct {
