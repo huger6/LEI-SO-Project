@@ -14,11 +14,12 @@
 #include "../include/log.h"
 
 // --- FILE PATHS ---
+
 #define CONFIG_PATH     "config/config.txt"         // config.txt 
 #define LOGS_PATH       "logs/hospital_log.txt"     // hospital_logs.txt
 
-
 // --- Global Resources ---
+
 system_config_t config;
 critical_log_shm_t critical_logger;
 global_statistics_t *shm_stats;
@@ -30,8 +31,22 @@ int shm_stats_id, shm_surgery_id, shm_pharm_id, shm_lab_id, shm_log_id;
 // Child PIDs
 pid_t pid_triage, pid_surgery, pid_pharmacy, pid_lab;
 
+// FLags
 volatile sig_atomic_t g_shutdown = 0;
+volatile sig_atomic_t display_stats_request = 0;
+volatile sig_atomic_t save_stats_request = 0;
+volatile sig_atomic_t child_exit_request = 0;
 
+// SIGCHLD pipe
+int sigchld_pipe[2];
+
+int init_sigchld_pipe() {
+    if (pipe(sigchld_pipe) == -1) {
+        perror("pipe");
+        return -1;
+    }
+    return 0;
+}
 
 // --- Signal Handlers ---
 
@@ -44,17 +59,17 @@ void sigint_handler(int sig) {
 
 void sigusr1_handler(int sig) {
     (void)sig;
-    // display_statistics_console(shm_stats);
+    display_stats_request = 1;
 }
 
 void sigusr2_handler(int sig) {
     (void)sig;
-    // save_statistics_snapshot(shm_stats);
+    save_stats_request = 1;
 }
 
 void sigchld_handler(int sig) {
     (void)sig;
-    while (waitpid(-1, NULL, WNOHANG) > 0);
+    child_exit_request = 1;
 }
 
 // Setup all signal handlers
@@ -109,7 +124,54 @@ int main(void) {
     #endif
 
     // --- IPC ---
+    log_event(INFO, "IPC", "INIT", "Starting IPC mechanisms");
 
+    // Initialize stats
+
+    // --- Fork ---
+
+
+    // --- Main loop ---
+    while(!g_shutdown) {
+        // --- SIGUSR1 ---
+        if (display_stats_request == 1) {
+            printf("SIGUSR1 called");
+            display_stats_request = 0;
+            display_statistics_console(shm_stats);
+        }
+        // --- SIGUSR2 ---
+        if (save_stats_request == 1) {
+            save_stats_request = 0;
+            save_statistics_snapshot(shm_stats);
+        }
+        // --- SIGCHLD ---
+        if (child_exit_request == 1) {
+            child_exit_request = 0;
+
+            int status;
+            pid_t pid;
+
+            while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+                char details[100]; 
+
+                if (WIFEXITED(status)) {
+                    // Child exited normaly
+                    snprintf(details, sizeof(details), "Child process %d terminated normally (code %d)", pid, WEXITSTATUS(status));
+                    log_event(INFO, "SYSTEM", "CHILD_EXIT", details);
+                }
+                else if (WIFSIGNALED(status)) {
+                    // Child exited by signal
+                    snprintf(details, sizeof(details), "Child process %d killed by signal %d", pid, WTERMSIG(status));
+                    log_event(ERROR, "SYSTEM", "CHILD_KILLED", details);            
+                }
+            }
+        }
+        // --- Main logic ---
+
+    }
+
+    // --- Shutdown sequence ---
+    log_event(INFO, "SYSTEM", "SHUTDOWN", "Initiating system shutdown");
 
     return 0;
 }

@@ -37,6 +37,13 @@
 #define PIPE_LAB      "lab_pipe"
 
 
+extern int mq_triage;
+extern int mq_surgery;
+extern int mq_pharmacy;
+extern int mq_lab;
+extern int mq_response;
+
+
 // Message Queue structure
 typedef struct {
     long msg_priority;  // 1=urgent, 2=high, 3=normal
@@ -52,10 +59,23 @@ typedef struct {
 } hospital_message_t;
 
 
+// --- Function Headers ---
+
+// Message queues
+int create_message_queues();
 int send_message(int mqid, hospital_message_t *msg);
 int receive_message_priority(int mqid, hospital_message_t *msg);
-int create_all_queues();
 void cleanup_message_queues();
+
+// SHM
+int create_shm();
+void *attach_shm(int shm_id);
+void initialize_shm_mutexes(void *shm_ptr, int shm_type);
+void cleanup_shared_memory();
+
+// FIFOs
+void create_named_pipes();
+void cleanup_named_pipes();
 
 
 #endif

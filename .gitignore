@@ -2,3 +2,4 @@ notes.md
 /.vscode
 /hospital_system/obj
 /hospital_system/hospital_system
+hospital_system/logs/hospital_log.txt
