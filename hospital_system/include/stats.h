@@ -9,7 +9,6 @@
 // Global statistics (SHM1)
 typedef struct {
     pthread_mutex_t mutex;
-    pthread_mutexattr_t mutex_attr;
     
     // --- Triage ---
     int total_emergency_patients;
@@ -56,13 +55,13 @@ typedef struct {
     int system_errors;
     time_t system_start_time;
     int simulation_time_units;
-} global_statistics_t;
+} global_statistics_shm_t;
 
 // --- Function Headers ---
 
 void init_stats(system_config_t *sys_ptr);
-void display_statistics_console(global_statistics_t *stats);
-void save_statistics_snapshot(global_statistics_t *stats);
-void init_stats_default(global_statistics_t *stats);
+void display_statistics_console(global_statistics_shm_t *stats);
+void save_statistics_snapshot(global_statistics_shm_t *stats);
+void init_stats_default(global_statistics_shm_t *stats, pthread_mutexattr_t *attr);
 
 #endif

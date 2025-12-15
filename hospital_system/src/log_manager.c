@@ -29,11 +29,14 @@ const char* get_severity_str(log_severity_t severity) {
     }
 }
 
-// Initialize logging system
-int init_logging(const char *filepath, critical_log_shm_t *shm_ptr) {
-    pthread_mutex_lock(&log_mutex);
-
+// Set logger ptr
+void set_critical_log_shm_ptr(critical_log_shm_t *shm_ptr) {
     global_log_shm = shm_ptr;
+}
+
+// Initialize logging system
+int init_logging(const char *filepath) {
+    pthread_mutex_lock(&log_mutex);
 
     // Open in append mode
     log_file = fopen(filepath, "a");

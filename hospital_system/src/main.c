@@ -21,13 +21,7 @@
 // --- Global Resources ---
 
 system_config_t config;
-critical_log_shm_t critical_logger;
-global_statistics_t *shm_stats;
-pharmacy_shm_t *shm_pharm;
 
-// IPC IDs
-int mq_urgent_id, mq_normal_id, mq_resp_id;
-int shm_stats_id, shm_surgery_id, shm_pharm_id, shm_lab_id, shm_log_id;
 // Child PIDs
 pid_t pid_triage, pid_surgery, pid_pharmacy, pid_lab;
 
@@ -36,17 +30,6 @@ volatile sig_atomic_t g_shutdown = 0;
 volatile sig_atomic_t display_stats_request = 0;
 volatile sig_atomic_t save_stats_request = 0;
 volatile sig_atomic_t child_exit_request = 0;
-
-// SIGCHLD pipe
-int sigchld_pipe[2];
-
-int init_sigchld_pipe() {
-    if (pipe(sigchld_pipe) == -1) {
-        perror("pipe");
-        return -1;
-    }
-    return 0;
-}
 
 // --- Signal Handlers ---
 
@@ -105,7 +88,7 @@ int main(void) {
     init_default_config(&config);
 
     // --- Initialize logging system ---
-    init_logging(LOGS_PATH, &critical_logger);
+    init_logging(LOGS_PATH);
     log_event(INFO, "SYSTEM", "STARTUP", "Hospital system starting");
 
     // --- Signal handlers ---
@@ -123,10 +106,22 @@ int main(void) {
         print_configs(&config);
     #endif
 
-    // --- IPC ---
+    // --- @IPC ---
+
     log_event(INFO, "IPC", "INIT", "Starting IPC mechanisms");
 
-    // Initialize stats
+    // --- Message Queues ---
+
+
+    // --- SHM ---
+    if (init_all_shm() != 0) {
+        // log_event is already called on init_all_shm()
+        cleanup_all_shm();
+    }
+
+    // Update critical logger ptr
+    set_critical_log_shm_ptr(shm_hospital->shm_critical_logger);
+
 
     // --- Fork ---
 
@@ -137,12 +132,12 @@ int main(void) {
         if (display_stats_request == 1) {
             printf("SIGUSR1 called");
             display_stats_request = 0;
-            display_statistics_console(shm_stats);
+            display_statistics_console(shm_hospital->shm_stats);
         }
         // --- SIGUSR2 ---
         if (save_stats_request == 1) {
             save_stats_request = 0;
-            save_statistics_snapshot(shm_stats);
+            save_statistics_snapshot(shm_hospital->shm_stats);
         }
         // --- SIGCHLD ---
         if (child_exit_request == 1) {

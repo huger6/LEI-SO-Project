@@ -40,7 +40,7 @@ static int compare_meds(const void *a, const void *b) {
     return ((med_sort_t *)b)->count - ((med_sort_t *)a)->count;
 }
 
-void display_statistics_console(global_statistics_t *stats) {
+void display_statistics_console(global_statistics_shm_t *stats) {
     if (!stats) return;
 
     // Lock mutex for thread safety
@@ -198,18 +198,16 @@ void display_statistics_console(global_statistics_t *stats) {
     pthread_mutex_unlock(&stats->mutex);
 }
 
-void save_statistics_snapshot(global_statistics_t *stats) {
+void save_statistics_snapshot(global_statistics_shm_t *stats) {
 
 }
 
 // Initialize stats to the default value
-void init_stats_default(global_statistics_t *stats) {
+void init_stats_default(global_statistics_shm_t *stats, pthread_mutexattr_t *attr) {
     if (!stats) return;
 
-    // Initialize mutex
-    pthread_mutexattr_init(&stats->mutex_attr);
-    pthread_mutexattr_setpshared(&stats->mutex_attr, PTHREAD_PROCESS_SHARED);
-    pthread_mutex_init(&stats->mutex, &stats->mutex_attr);
+    memset(stats, 0, sizeof(*stats));
+    pthread_mutex_init(&stats->mutex, attr);
 
     // Lock to ensure safe initialization
     pthread_mutex_lock(&stats->mutex);

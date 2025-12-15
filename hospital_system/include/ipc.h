@@ -43,6 +43,8 @@ extern int mq_pharmacy;
 extern int mq_lab;
 extern int mq_response;
 
+// SHM
+extern hospital_shm_t *shm_hospital;
 
 // Message Queue structure
 typedef struct {
@@ -58,6 +60,14 @@ typedef struct {
     char data[512];
 } hospital_message_t;
 
+typedef struct {
+    global_statistics_shm_t *shm_stats;
+    surgery_block_shm_t *shm_surg;
+    pharmacy_shm_t *shm_pharm;
+    lab_queue_shm_t *shm_lab;
+    critical_log_shm_t *shm_critical_logger;
+} hospital_shm_t;
+
 
 // --- Function Headers ---
 
@@ -68,10 +78,8 @@ int receive_message_priority(int mqid, hospital_message_t *msg);
 void cleanup_message_queues();
 
 // SHM
-int create_shm();
-void *attach_shm(int shm_id);
-void initialize_shm_mutexes(void *shm_ptr, int shm_type);
-void cleanup_shared_memory();
+int init_all_shm();
+void cleanup_all_shm();
 
 // FIFOs
 void create_named_pipes();
