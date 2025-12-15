@@ -180,6 +180,7 @@ int init_all_shm() {
 
     pthread_mutexattr_destroy(&attr);
 
+    // Init data in main
     return 0;
 }
 
@@ -209,3 +210,44 @@ void cleanup_all_shm() {
     log_event(INFO, "IPC", "SHM", "Finished cleaning SHM resources");
 }
 
+// Initialize all shared memory with default data values
+void init_all_shm_data(system_config_t *configs) {
+     // --- Init SHM data ---
+
+    // Stats is already initialized (SHM1)
+
+    // SHM2: Surgery Block
+    shm_hospital->shm_surg->medical_teams_available = configs->max_medical_teams;
+    for (int i = 0; i < 3; i++) {
+        shm_hospital->shm_surg->rooms[i].room_id = i + 1;
+        shm_hospital->shm_surg->rooms[i].status = 0; // FREE
+        shm_hospital->shm_surg->rooms[i].current_patient[0] = '\0';
+        shm_hospital->shm_surg->rooms[i].surgery_start_time = 0;
+        shm_hospital->shm_surg->rooms[i].estimated_end_time = 0;
+    }
+
+    // SHM3: Pharmacy
+    shm_hospital->shm_pharm->total_active_requests = 0;
+    for (int i = 0; i < configs->med_count; i++) {
+        strncpy(shm_hospital->shm_pharm->medications[i].name, configs->medications[i].name, 29);
+        shm_hospital->shm_pharm->medications[i].name[29] = '\0';
+        shm_hospital->shm_pharm->medications[i].current_stock = configs->medications[i].initial_stock;
+        shm_hospital->shm_pharm->medications[i].threshold = configs->medications[i].threshold;
+        shm_hospital->shm_pharm->medications[i].reserved = 0;
+        shm_hospital->shm_pharm->medications[i].max_capacity = configs->medications[i].initial_stock * 2; // Example capacity
+    }
+
+    // SHM4: Lab Queues
+    shm_hospital->shm_lab->lab1_available_slots = configs->max_simultaneous_tests_lab1;
+    shm_hospital->shm_lab->lab2_available_slots = configs->max_simultaneous_tests_lab2;
+    shm_hospital->shm_lab->lab1_count = 0;
+    shm_hospital->shm_lab->lab2_count = 0;
+    
+    // Clear queues
+    memset(shm_hospital->shm_lab->queue_lab1, 0, sizeof(shm_hospital->shm_lab->queue_lab1));
+    memset(shm_hospital->shm_lab->queue_lab2, 0, sizeof(shm_hospital->shm_lab->queue_lab2));
+    
+    // SHM5: Critical Log
+    shm_hospital->shm_critical_logger->event_count = 0;
+    shm_hospital->shm_critical_logger->current_index = 0;
+}

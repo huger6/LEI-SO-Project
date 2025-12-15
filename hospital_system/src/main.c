@@ -111,13 +111,15 @@ int main(void) {
     log_event(INFO, "IPC", "INIT", "Starting IPC mechanisms");
 
     // --- Message Queues ---
-
+    
 
     // --- SHM ---
     if (init_all_shm() != 0) {
         // log_event is already called on init_all_shm()
         cleanup_all_shm();
+        exit(EXIT_FAILURE);
     }
+    init_all_shm_data(&config);
 
     // Update critical logger ptr
     set_critical_log_shm_ptr(shm_hospital->shm_critical_logger);

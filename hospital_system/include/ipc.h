@@ -2,6 +2,7 @@
 #define IPC_H
 
 #include <sys/types.h>
+#include "config.h"
 
 
 // IPC Keys
@@ -60,6 +61,7 @@ typedef struct {
     char data[512];
 } hospital_message_t;
 
+// Hospital SHM memory structure
 typedef struct {
     global_statistics_shm_t *shm_stats;
     surgery_block_shm_t *shm_surg;
@@ -80,6 +82,7 @@ void cleanup_message_queues();
 // SHM
 int init_all_shm();
 void cleanup_all_shm();
+void init_all_shm_data(system_config_t *configs);
 
 // FIFOs
 void create_named_pipes();
