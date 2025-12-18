@@ -2,56 +2,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <errno.h>
-#include <semaphore.h>
-#include <sys/ipc.h>
 #include <sys/shm.h>
-#include <sys/msg.h>
-#include <sys/stat.h>
+#include <pthread.h>
 
-#include "../include/ipc.h" 
-#include "../include/log.h"
-#include "../include/hospital.h"
-#include "../include/stats.h"
+#include "../include/shm.h"
 
-
-// External globals for IDs
-extern int mq_urgent_id, mq_normal_id, mq_resp_id;
-extern int shm_stats_id, shm_surgery_id, shm_pharm_id, shm_lab_id, shm_log_id;
-
-// IPC IDs
-int mq_urgent_id = -1;
-int mq_normal_id = -1;
-int mq_resp_id = -1;
-
+// SHM Id's
 int shm_stats_id = -1;
 int shm_surgery_id = -1;
 int shm_pharm_id = -1;
 int shm_lab_id = -1;
 int shm_log_id = -1;
 
-// SHM
+
+// Hospital SHM
 hospital_shm_t *shm_hospital = NULL;
 
-// --- Message Queues ---
-
-int create_message_queues() {
-    // mq_triage = 
-}
-
-int send_message(int mqid, hospital_message_t *msg) {
-
-}
-
-int receive_message_priority(int mqid, hospital_message_t *msg) {
-
-}
-
-void cleanup_message_queues() {
-
-}
-
-// --- SHM ---
 
 // Create all SHM IDS (no attach)
 static int create_shm() {
@@ -212,8 +178,6 @@ void cleanup_all_shm() {
 
 // Initialize all shared memory with default data values
 void init_all_shm_data(system_config_t *configs) {
-     // --- Init SHM data ---
-
     // Stats is already initialized (SHM1)
 
     // SHM2: Surgery Block
@@ -251,3 +215,4 @@ void init_all_shm_data(system_config_t *configs) {
     shm_hospital->shm_critical_logger->event_count = 0;
     shm_hospital->shm_critical_logger->current_index = 0;
 }
+

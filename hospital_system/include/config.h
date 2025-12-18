@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <time.h>
 
+
 typedef struct {
     char key[50];
     char value[100];
@@ -53,12 +54,14 @@ typedef struct {
     int med_count;
 } system_config_t;
 
+extern system_config_t *config;
+
 
 // --- Function Headers ---
 
-int load_config(const char *filename, system_config_t *config);
-void print_configs(system_config_t *config);
-void init_default_config(system_config_t *config);
+int load_config(const char *filename);
+void print_configs();
+int init_default_config();
 
 
 #endif

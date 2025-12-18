@@ -5,6 +5,9 @@
 #include "../include/config.h"
 #include "../include/log.h"
 
+// Global system config ptr
+system_config_t *config = NULL;
+
 // Trim whitespace
 static void trim(char *str) {
     char *start = str;
@@ -68,7 +71,9 @@ static int parse_config_line(char *line, config_param_t *param) {
 }
 
 // Verify loading was successful and logically consistent
-static int validate_config(system_config_t *config) {
+static int validate_config() {
+    if (!config) return 0;
+
     int valid = 1;
     char buffer[256];
 
@@ -206,7 +211,7 @@ static int validate_config(system_config_t *config) {
 }
 
 // Load configs from config.txt
-int load_config(const char *filename, system_config_t *config) {
+int load_config(const char *filename) {
     FILE *file = fopen(filename, "r");
     if (!file) {
         log_event(ERROR, "CONFIG", "LOADING", "config.txt file not found");
@@ -280,7 +285,9 @@ int load_config(const char *filename, system_config_t *config) {
 }
 
 // Print current system configs
-void print_configs(system_config_t *config) {
+void print_configs() {
+    if (!config) return;
+
     // Global Settings
     printf("=== GLOBAL SETTINGS ===\n");
     printf("Time Unit (ms): %d\n", config->time_unit_ms);
@@ -324,9 +331,12 @@ void print_configs(system_config_t *config) {
 }
 
 // Initiliaze the system with default configs
-void init_default_config(system_config_t *config) {
-    if (config == NULL) return;
-
+int init_default_config() {
+    config = (system_config_t *) malloc(sizeof(system_config_t));
+    if (!config) {
+        perror("Error allocating memory for the system configs");
+        return -1;
+    }
     // Ensure there's no garbage
     memset(config, 0, sizeof(system_config_t));
 
@@ -404,5 +414,7 @@ void init_default_config(system_config_t *config) {
         config->medications[i].initial_stock = default_meds[i].initial_stock;
         config->medications[i].threshold = default_meds[i].threshold;
     }
+
+    return 0;
 }
 
