@@ -1,10 +1,12 @@
 #include <ctype.h>
 #include <string.h>
+#include <errno.h>
 #include "../include/console_input.h"
 
 #include "../include/pipes.h"
 #include "../include/log.h"
 #include "../include/config.h"
+#include "../include/manager_utils.h"
 
 
 // Helper to trim leading/trailing whitespace
@@ -21,11 +23,18 @@ static char* trim_whitespace(char* str) {
 void process_console_input(void) {
     char buffer[256];
 
+    // Setup signal handlers for child process (no SA_RESTART)
+    setup_child_signals();
+
     // Log start of input loop
     log_event(INFO, "INPUT", "START", "Console input listener started");
 
     // Continuous loop reading from stdin
-    while (fgets(buffer, sizeof(buffer), stdin) != NULL) {
+    while (!g_stop_child) {
+        if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
+            if (errno == EINTR) continue; // Interrupted by signal, check g_stop_child
+            break; // EOF or error
+        }
         
         // Remove trailing newline character replaced by null terminator
         buffer[strcspn(buffer, "\n")] = 0;

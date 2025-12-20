@@ -28,7 +28,7 @@ extern sem_t *sem_pharmacy;
 
 int init_all_semaphores(void);
 void close_all_semaphores(void);
-int destroy_all_semaphores(void);
+int unlink_all_semaphores(void);
 int sem_wait_safe(sem_t *sem, const char *sem_name);
 int sem_post_safe(sem_t *sem, const char *sem_name);
 

@@ -124,6 +124,7 @@ int main(void) {
     pid_console_input = fork();
     if (pid_console_input == 0) {
         // Child: Console Input
+
         // Close all read ends
         for(int i = 0; i < 6; i++) close(get_pipe_read_end(i));
         // Close all write ends except INPUT
@@ -131,7 +132,17 @@ int main(void) {
             if (i != PIPE_INPUT) close(get_pipe_write_end(i));
         }
 
+        // Override signal handler 
+        // struct sigaction sa_child;
+        // sigemptyset(&sa_child.sa_mask);
+
+        // sa_child.sa_flags = 0;
+        // sa_child.sa_handler = handle_input_shutdown;
+
         process_console_input();
+
+        log_event(INFO, "CONSOLE_INPUT", "RESOURCES_CLEANUP", "Cleaning console input receiver resources");
+        child_cleanup();
         exit(EXIT_SUCCESS);
     } 
     else if (pid_console_input < 0) {
@@ -144,6 +155,9 @@ int main(void) {
     if (pid_triage == 0) {
         close_unused_pipe_ends(ROLE_TRIAGE);
         triage_main();
+
+        log_event(INFO, "TRIAGE", "RESOURCES_CLEANUP", "Cleaning triage resources");
+        child_cleanup();
         exit(EXIT_SUCCESS);
     } 
     else if (pid_triage < 0) {
@@ -156,6 +170,9 @@ int main(void) {
     if (pid_surgery == 0) {
         close_unused_pipe_ends(ROLE_SURGERY);
         surgery_main();
+
+        log_event(INFO, "SURGERY", "RESOURCES_CLEANUP", "Cleaning surgery resources");
+        child_cleanup();
         exit(EXIT_SUCCESS);
     }
     else if (pid_surgery < 0) {
@@ -168,6 +185,9 @@ int main(void) {
     if (pid_pharmacy == 0) {
         close_unused_pipe_ends(ROLE_PHARMACY);
         pharmacy_main();
+
+        log_event(INFO, "PHARMACY", "RESOURCES_CLEANUP", "Cleaning pharmacy resources");
+        child_cleanup();
         exit(EXIT_SUCCESS);
     } 
     else if (pid_pharmacy < 0) {
@@ -180,6 +200,9 @@ int main(void) {
     if (pid_lab == 0) {
         close_unused_pipe_ends(ROLE_LAB);
         lab_main();
+
+        log_event(INFO, "LAB", "RESOURCES_CLEANUP", "Cleaning laboratory resources");
+        child_cleanup();
         exit(EXIT_SUCCESS);
     }
     else if (pid_lab < 0) {
@@ -254,9 +277,9 @@ int main(void) {
             accumulated_ms %= config->time_unit_ms;
             
             #ifdef DEBUG
-            char tick_msg[50];
-            snprintf(tick_msg, sizeof(tick_msg), "Tick: %d", current_logical_time);
-            log_event(DEBUG, "SCHEDULER", "TICK", tick_msg);
+                char tick_msg[50];
+                snprintf(tick_msg, sizeof(tick_msg), "Tick: %d", current_logical_time);
+                log_event(DEBUG, "SCHEDULER", "TICK", tick_msg);
             #endif
         }
 
@@ -329,25 +352,7 @@ int main(void) {
     }
 
     // --- Shutdown sequence ---
-    log_event(INFO, "SYSTEM", "SHUTDOWN", "Initiating system shutdown");
-    
-    // Kill children if needed
-    if (pid_console_input > 0) {
-        kill(pid_console_input, SIGTERM);
-        waitpid(pid_console_input, NULL, 0);
-    }
-    
-    // Disable SHM logging before destroying SHM
-    set_critical_log_shm_ptr(NULL);
-
-    cleanup_all_shm();
-    remove_all_message_queues();
-    destroy_all_pipes();
-    destroy_all_semaphores();
-
-    log_event(INFO, "SYSTEM", "SHUTDOWN", "Shutdown was successful. Goodbye");
-
-    close_logging();
+    manager_cleanup();
 
     return 0;
 }

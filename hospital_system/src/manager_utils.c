@@ -1,16 +1,33 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <stdio.h>
 #include <signal.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
 #include <ctype.h>
 
 #include "../include/manager_utils.h"
 #include "../include/pipes.h"
+#include "../include/log.h"
+#include "../include/sem.h"
+#include "../include/config.h"
+#include "../include/mq.h"
+#include "../include/shm.h"
+
+volatile sig_atomic_t g_stop_child = 0;
 
 // Generic handler that writes to the self-pipe
 static void generic_signal_handler(int sig) {
     notify_manager_from_signal(sig);
+}
+
+// Handler for child processes (no SA_RESTART)
+static void child_signal_handler(int sig) {
+    (void)sig;
+    g_stop_child = 1;
 }
 
 // Setup all signal handlers
@@ -27,6 +44,17 @@ void setup_signal_handlers(void) {
     sigaction(SIGUSR1, &sa, NULL);
     sigaction(SIGUSR2, &sa, NULL);
     sigaction(SIGCHLD, &sa, NULL);
+}
+
+// Setup signal handlers for child processes
+void setup_child_signals(void) {
+    struct sigaction sa;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; // No SA_RESTART to interrupt blocking calls
+    sa.sa_handler = child_signal_handler;
+
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
 }
 
 // Returns 1 if valid, 0 if invalid
@@ -47,4 +75,36 @@ int validate_patient_id(const char *id) {
     }
 
     return 1;
+}
+
+// Use only on child processes
+void child_cleanup() {
+    cleanup_child_shm();
+    close_all_semaphores();
+    cleanup_config();
+    close_logging();
+}
+
+// Cleanup all resources for the manager
+void manager_cleanup() {
+    log_event(INFO, "SYSTEM", "SHUTDOWN", "Initiating system shutdown");
+    
+    // Kill children if needed
+    if (pid_console_input > 0) {
+        kill(pid_console_input, SIGTERM);
+        waitpid(pid_console_input, NULL, 0);
+    }
+    // Disable SHM logging before destroying SHM
+    set_critical_log_shm_ptr(NULL);
+
+    cleanup_all_shm();
+    remove_all_message_queues();
+    destroy_all_pipes();
+    close_all_semaphores();
+    unlink_all_semaphores();
+    cleanup_config();
+
+    log_event(INFO, "SYSTEM", "SHUTDOWN", "Shutdown was successful. Goodbye");
+
+    close_logging();
 }

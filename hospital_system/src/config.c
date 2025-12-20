@@ -418,3 +418,11 @@ int init_default_config() {
     return 0;
 }
 
+// Clean up and free config memory
+void cleanup_config() {
+    if (config) {
+        free(config);
+        config = NULL;
+    }
+}
+

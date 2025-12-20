@@ -159,7 +159,7 @@ int init_all_shm() {
     return 0;
 }
 
-// Clean all SHM 
+// Clean all SHM (DO NOT USE ON CHILD PROCESSES)
 void cleanup_all_shm() {
     log_event(INFO, "IPC", "SHM", "Starting SHM resources cleanup");
     if (shm_hospital) {
@@ -183,6 +183,30 @@ void cleanup_all_shm() {
     if (shm_log_id != -1) shmctl(shm_log_id, IPC_RMID, NULL);
 
     log_event(INFO, "IPC", "SHM", "Finished cleaning SHM resources");
+}
+
+// Cleans SHM to avoid mem leaks in child processes
+void cleanup_child_shm() {
+    if (shm_hospital) {
+        if (shm_hospital->shm_stats && shm_hospital->shm_stats != (void *)-1) 
+            shmdt(shm_hospital->shm_stats);
+        
+        if (shm_hospital->shm_surg && shm_hospital->shm_surg != (void *)-1) 
+            shmdt(shm_hospital->shm_surg);
+        
+        if (shm_hospital->shm_pharm && shm_hospital->shm_pharm != (void *)-1) 
+            shmdt(shm_hospital->shm_pharm);
+        
+        if (shm_hospital->shm_lab && shm_hospital->shm_lab != (void *)-1) 
+            shmdt(shm_hospital->shm_lab);
+            
+        if (shm_hospital->shm_critical_logger && shm_hospital->shm_critical_logger != (void *)-1) 
+            shmdt(shm_hospital->shm_critical_logger);
+        
+        free(shm_hospital);
+        shm_hospital = NULL;
+    }
+
 }
 
 // Initialize all shared memory with default data values

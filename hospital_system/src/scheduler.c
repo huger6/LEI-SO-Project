@@ -61,6 +61,12 @@ void process_scheduled_events(int current_time) {
         
         // Execute event
         send_generic_message(current->mq_id, current->msg_data, current->msg_size);
+
+        // Debug logging for EMERGENCY command
+        msg_header_t *hdr = (msg_header_t *)current->msg_data;
+        if (hdr->kind == MSG_NEW_EMERGENCY) {
+            log_event(INFO, "SCHEDULER", "EMERGENCY_SENT", "Emergency sent to triage (scheduled)");
+        }
         
         char log_msg[128];
         snprintf(log_msg, sizeof(log_msg), "Executed event scheduled for %d at time %d", 

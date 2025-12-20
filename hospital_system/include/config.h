@@ -62,6 +62,7 @@ extern system_config_t *config;
 int load_config(const char *filename);
 void print_configs();
 int init_default_config();
+void cleanup_config();
 
 
 #endif

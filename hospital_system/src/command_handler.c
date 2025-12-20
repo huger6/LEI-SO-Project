@@ -99,12 +99,13 @@ void handle_command(char *cmd_buf, int current_time) {
             return;
         }
 
-        msg.hdr.timestamp = init;
+        msg.hdr.timestamp = current_time + init;
         msg.triage_level = triage;
         msg.stability = stability;
         
         if (msg.hdr.timestamp <= current_time) {
             send_generic_message(mq_triage_id, &msg, sizeof(msg));
+            log_event(INFO, "MANAGER", "EMERGENCY_SENT", "Emergency sent to triage on the spot");
         } else {
             add_scheduled_event((int)msg.hdr.timestamp, mq_triage_id, &msg, sizeof(msg));
         }
@@ -156,8 +157,8 @@ void handle_command(char *cmd_buf, int current_time) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "APPOINTMENT: Invalid/Missing init time");
             return;
         }
-        if (!has_scheduled || scheduled <= init) {
-            log_event(WARNING, "MANAGER", "INVALID_CMD", "APPOINTMENT: Invalid/Missing scheduled time (> init)");
+        if (!has_scheduled || scheduled <= current_time + init) {
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "APPOINTMENT: Invalid/Missing scheduled time (> init + current_time)");
             return;
         }
         if (!has_doctor) {
@@ -165,7 +166,7 @@ void handle_command(char *cmd_buf, int current_time) {
             return;
         }
 
-        msg.hdr.timestamp = init;
+        msg.hdr.timestamp = current_time + init;
         msg.scheduled_time = scheduled;
         msg.doctor_specialty = doctor_id;
         
@@ -232,8 +233,8 @@ void handle_command(char *cmd_buf, int current_time) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Invalid/Missing init time");
             return;
         }
-        if (!has_scheduled || scheduled <= init) {
-            log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Invalid/Missing scheduled time (> init)");
+        if (!has_scheduled || scheduled <= current_time + init) {
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Invalid/Missing scheduled time (> init + current_time)");
             return;
         }
         if (!has_type) {
@@ -262,7 +263,7 @@ void handle_command(char *cmd_buf, int current_time) {
             return;
         }
 
-        msg.hdr.timestamp = init;
+        msg.hdr.timestamp = current_time + init;
         msg.surgery_type = type_id;
         msg.scheduled_time = scheduled;
         msg.urgency = urgency_id;
@@ -324,7 +325,7 @@ void handle_command(char *cmd_buf, int current_time) {
             return;
         }
 
-        msg.hdr.timestamp = init;
+        msg.hdr.timestamp = current_time + init;
         msg.hdr.mtype = priority; // Map priority to mtype
         
         if (msg.hdr.timestamp <= current_time) {
@@ -396,7 +397,7 @@ void handle_command(char *cmd_buf, int current_time) {
             return;
         }
 
-        msg.hdr.timestamp = init;
+        msg.hdr.timestamp = current_time + init;
         msg.hdr.mtype = priority; // Map priority to mtype
         
         if (msg.hdr.timestamp <= current_time) {

@@ -36,6 +36,7 @@ extern hospital_shm_t *shm_hospital;
 
 int init_all_shm();
 void cleanup_all_shm();
+void cleanup_child_shm();
 void init_all_shm_data(system_config_t *configs);
 
 

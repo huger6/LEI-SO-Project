@@ -31,3 +31,19 @@ $(OBJ_DIR):
 
 clean:
 	rm -rf $(OBJ_DIR) $(EXEC)
+	[ -d results ] && find results -type f -delete || true
+	rm -f logs/hospital_log.txt
+
+# --- Tests ---
+
+# Memory leaks
+check_memory: $(EXEC)
+	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --log-file=valgrind_mem.log ./$(EXEC)
+
+# Race conditions
+check_threads: $(EXEC)
+	valgrind --tool=helgrind --log-file=valgrind_helgrind.log ./$(EXEC)
+
+# Deadlocks
+check_deadlock: $(EXEC)
+	valgrind --tool=drd --log-file=valgrind_drd.log ./$(EXEC)

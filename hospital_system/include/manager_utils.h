@@ -1,10 +1,17 @@
 #ifndef MANAGER_UTILS_H
 #define MANAGER_UTILS_H
 
-// Setup all signal handlers for the manager process
-void setup_signal_handlers(void);
+#include <signal.h>
+#include <sys/types.h>
 
-// Returns 1 if valid, 0 if invalid
+extern pid_t pid_console_input;
+extern volatile sig_atomic_t g_stop_child;
+
+void setup_signal_handlers(void);
+void setup_child_signals(void);
 int validate_patient_id(const char *id);
+
+void child_cleanup();
+void manager_cleanup();
 
 #endif

@@ -139,7 +139,7 @@ static int _unlink_single_sem(const char *name) {
  * 0: All semaphores removed successfully.
  * -1: At least one semaphore failed to be removed.
  */
-int destroy_all_semaphores(void) {
+int unlink_all_semaphores(void) {
     int final_status = 0;
 
     // 1. Unlink Surgery Block Semaphores
@@ -214,4 +214,3 @@ int sem_post_safe(sem_t *sem, const char *sem_name) {
 
     return 0;
 }
-
