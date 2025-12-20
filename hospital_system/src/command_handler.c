@@ -12,6 +12,7 @@
 #include "../include/console_input.h"
 #include "../include/scheduler.h"
 #include "../include/stats.h"
+#include "../include/manager_utils.h"
 
 // External global shutdown flag (defined in main.c)
 extern volatile sig_atomic_t g_shutdown;
@@ -46,6 +47,11 @@ void handle_command(char *cmd_buf, int current_time) {
         char *code = strtok_r(NULL, " ", &saveptr);
         if (!code) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "EMERGENCY: Missing code");
+            return;
+        }
+        
+        if (!validate_patient_id(code)) {
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "EMERGENCY: Invalid patient ID format");
             return;
         }
         
@@ -110,6 +116,11 @@ void handle_command(char *cmd_buf, int current_time) {
             return;
         }
         
+        if (!validate_patient_id(code)) {
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "APPOINTMENT: Invalid patient ID format");
+            return;
+        }
+        
         msg_new_appointment_t msg;
         memset(&msg, 0, sizeof(msg));
         msg.hdr.mtype = 1;
@@ -168,6 +179,11 @@ void handle_command(char *cmd_buf, int current_time) {
         char *code = strtok_r(NULL, " ", &saveptr);
         if (!code) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Missing code");
+            return;
+        }
+        
+        if (!validate_patient_id(code)) {
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Invalid patient ID format");
             return;
         }
         
@@ -264,6 +280,11 @@ void handle_command(char *cmd_buf, int current_time) {
             return;
         }
         
+        if (!validate_patient_id(code)) {
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "PHARMACY_REQUEST: Invalid patient ID format");
+            return;
+        }
+        
         msg_pharmacy_request_t msg;
         memset(&msg, 0, sizeof(msg));
         msg.hdr.mtype = 1;
@@ -316,6 +337,11 @@ void handle_command(char *cmd_buf, int current_time) {
         char *code = strtok_r(NULL, " ", &saveptr);
         if (!code) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "LAB_REQUEST: Missing code");
+            return;
+        }
+        
+        if (!validate_patient_id(code)) {
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "LAB_REQUEST: Invalid patient ID format");
             return;
         }
         
