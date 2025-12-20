@@ -1,6 +1,6 @@
 #include <stdio.h>
 
 
-void surgery_main(void) {
+void lab_main(void) {
     
 }

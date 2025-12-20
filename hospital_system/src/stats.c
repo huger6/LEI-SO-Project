@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "../include/stats.h"
+#include "../include/log.h"
 
 // Ptr to track some configs necessary for stats
 static system_config_t *sys_config_ptr = NULL;
@@ -40,8 +41,10 @@ static int compare_meds(const void *a, const void *b) {
     return ((med_sort_t *)b)->count - ((med_sort_t *)a)->count;
 }
 
-void display_statistics_console(global_statistics_shm_t *stats) {
+void display_statistics_console(global_statistics_shm_t *stats, const char *component) {
     if (!stats) return;
+
+    log_event(INFO, "STATS", "DISPLAY", "Displaying statistic to the console");
 
     // Lock mutex for thread safety
     pthread_mutex_lock(&stats->mutex);
@@ -136,70 +139,89 @@ void display_statistics_console(global_statistics_shm_t *stats) {
         ((double)(stats->total_operations - stats->system_errors) / stats->total_operations) * 100.0 : 100.0;
 
     // ================= DISPLAY =================
+    int show_all = (component == NULL || strcasecmp(component, "ALL") == 0);
+    int show_triage = (show_all || strcasecmp(component, "TRIAGE") == 0);
+    int show_surgery = (show_all || strcasecmp(component, "SURGERY") == 0);
+    int show_pharmacy = (show_all || strcasecmp(component, "PHARMACY") == 0);
+    int show_lab = (show_all || strcasecmp(component, "LAB") == 0);
+
     printf("\n==========================================\n");
     printf("HOSPITAL SYSTEM STATISTICS\n");
     printf("==========================================\n");
     printf("Timestamp: %s\n", time_buf);
     printf("Operation Time: %ld seconds (%.0f minutes)\n", elapsed_seconds, elapsed_minutes);
     
-    printf("TRIAGE CENTER ------------------\n");
-    printf("Total Emergencies: %d\n", stats->total_emergency_patients);
-    printf("Total Appointments: %d\n", stats->total_appointments);
-    printf("Avg Wait Time (Emerg.): %.1f tu\n", avg_wait_em);
-    printf("Avg Wait Time (Appt.): %.1f tu\n", avg_wait_app);
-    printf("Transferred Patients: %d\n", stats->critical_transfers);
-    printf("Rejected Patients: %d\n", stats->rejected_patients);
-    printf("Occupancy Rate: %.1f%%\n", triage_occupancy_rate);
-
-    printf("OPERATING BLOCKS ------------------\n");
-    printf("BO1 (Cardiology):\n");
-    printf("  Surgeries: %d | Avg Time: %.1f tu | Utilization: %.1f%%\n", 
-           stats->total_surgeries_bo1, bo1_avg_time, bo1_util_pct);
-    printf("BO2 (Orthopedics):\n");
-    printf("  Surgeries: %d | Avg Time: %.1f tu | Utilization: %.1f%%\n", 
-           stats->total_surgeries_bo2, bo2_avg_time, bo2_util_pct);
-    printf("BO3 (Neurology):\n");
-    printf("  Surgeries: %d | Avg Time: %.1f tu | Utilization: %.1f%%\n", 
-           stats->total_surgeries_bo3, bo3_avg_time, bo3_util_pct);
-    printf("Cancelled Surgeries: %d\n", stats->cancelled_surgeries);
-    printf("Avg Wait Time: %.1f tu\n", avg_surgery_wait);
-
-    printf("CENTRAL PHARMACY ----------------\n");
-    printf("Total Requests: %d\n", stats->total_pharmacy_requests);
-    printf("Urgent Requests: %d\n", stats->urgent_requests);
-    printf("Avg Response Time: %.1f tu\n", avg_pharm_resp);
-    printf("Stock Restocks: %d\n", stats->auto_restocks);
-    printf("Depletions: %d\n", stats->stock_depletions);
-    printf("Top Medicines:\n");
-    for(int i = 0; i < 3; i++) {
-        printf("  %d. %s: %d units\n", 
-            i+1, 
-            MEDICATION_NAMES[sorted_meds[i].id], 
-            sorted_meds[i].count);
+    if (show_triage) {
+        printf("TRIAGE CENTER ------------------\n");
+        printf("Total Emergencies: %d\n", stats->total_emergency_patients);
+        printf("Total Appointments: %d\n", stats->total_appointments);
+        printf("Avg Wait Time (Emerg.): %.1f tu\n", avg_wait_em);
+        printf("Avg Wait Time (Appt.): %.1f tu\n", avg_wait_app);
+        printf("Transferred Patients: %d\n", stats->critical_transfers);
+        printf("Rejected Patients: %d\n", stats->rejected_patients);
+        printf("Occupancy Rate: %.1f%%\n", triage_occupancy_rate);
     }
 
-    printf("LABORATORIES ------------\n");
-    printf("LAB1: %d tests | Avg Time: %.1f tu | Utilization: %.1f%%\n", 
-           stats->total_lab_tests_lab1, avg_time_lab1, util_lab1);
-           
-    printf("LAB2: %d tests | Avg Time: %.1f tu | Utilization: %.1f%%\n", 
-           stats->total_lab_tests_lab2, avg_time_lab2, util_lab2);
-           
-    printf("Urgent Tests: %d\n", stats->urgent_lab_tests);
-    printf("Global Avg Turnaround: %.1f tu\n", global_lab_avg);
+    if (show_surgery) {
+        printf("OPERATING BLOCKS ------------------\n");
+        printf("BO1 (Cardiology):\n");
+        printf("  Surgeries: %d | Avg Time: %.1f tu | Utilization: %.1f%%\n", 
+            stats->total_surgeries_bo1, bo1_avg_time, bo1_util_pct);
+        printf("BO2 (Orthopedics):\n");
+        printf("  Surgeries: %d | Avg Time: %.1f tu | Utilization: %.1f%%\n", 
+            stats->total_surgeries_bo2, bo2_avg_time, bo2_util_pct);
+        printf("BO3 (Neurology):\n");
+        printf("  Surgeries: %d | Avg Time: %.1f tu | Utilization: %.1f%%\n", 
+            stats->total_surgeries_bo3, bo3_avg_time, bo3_util_pct);
+        printf("Cancelled Surgeries: %d\n", stats->cancelled_surgeries);
+        printf("Avg Wait Time: %.1f tu\n", avg_surgery_wait);
+    }
 
-    printf("GLOBALS -------\n");
-    printf("Total Operations: %d\n", stats->total_operations);
-    printf("Throughput: %.1f ops/min\n", throughput);
-    printf("System Errors: %d\n", stats->system_errors);
-    printf("Success Rate: %.1f%%\n", success_rate);
+    if (show_pharmacy) {
+        printf("CENTRAL PHARMACY ----------------\n");
+        printf("Total Requests: %d\n", stats->total_pharmacy_requests);
+        printf("Urgent Requests: %d\n", stats->urgent_requests);
+        printf("Avg Response Time: %.1f tu\n", avg_pharm_resp);
+        printf("Stock Restocks: %d\n", stats->auto_restocks);
+        printf("Depletions: %d\n", stats->stock_depletions);
+        printf("Top Medicines:\n");
+        for(int i = 0; i < 3; i++) {
+            printf("  %d. %s: %d units\n", 
+                i+1, 
+                MEDICATION_NAMES[sorted_meds[i].id], 
+                sorted_meds[i].count);
+        }
+    }
+
+    if (show_lab) {
+        printf("LABORATORIES ------------\n");
+        printf("LAB1: %d tests | Avg Time: %.1f tu | Utilization: %.1f%%\n", 
+            stats->total_lab_tests_lab1, avg_time_lab1, util_lab1);
+            
+        printf("LAB2: %d tests | Avg Time: %.1f tu | Utilization: %.1f%%\n", 
+            stats->total_lab_tests_lab2, avg_time_lab2, util_lab2);
+            
+        printf("Urgent Tests: %d\n", stats->urgent_lab_tests);
+        printf("Global Avg Turnaround: %.1f tu\n", global_lab_avg);
+    }
+
+    if (show_all) {
+        printf("GLOBALS -------\n");
+        printf("Total Operations: %d\n", stats->total_operations);
+        printf("Throughput: %.1f ops/min\n", throughput);
+        printf("System Errors: %d\n", stats->system_errors);
+        printf("Success Rate: %.1f%%\n", success_rate);
+    }
     printf("==========================================\n");
 
     pthread_mutex_unlock(&stats->mutex);
 }
 
 void save_statistics_snapshot(global_statistics_shm_t *stats) {
+    if (!stats) return;
 
+    log_event(INFO, "STATS", "SNAPSHOT", "Saving statistics snapshot");
+    
 }
 
 // Initialize stats to the default value

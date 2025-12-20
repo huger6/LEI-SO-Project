@@ -1,0 +1,3 @@
+# FTOK_PATH file. 
+
+# DO NOT REMOVE.

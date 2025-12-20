@@ -51,6 +51,9 @@ void close_unused_pipe_ends(int process_role) {
     int i;
     char log_details[256];
 
+    snprintf(log_details, sizeof(log_details), "Closing unused pipe ends for role %d", process_role);
+    log_event(INFO, "IPC", "PIPE_CLEANUP", log_details);
+
     for (i = 0; i < NUM_PIPES; i++) {
         // Default: close both ends unless specified otherwise
         int keep_read = 0;
@@ -108,18 +111,24 @@ void close_unused_pipe_ends(int process_role) {
 
         // Perform closing operations
         if (!keep_read) {
-            if (close(pipe_fds[i][READ_END]) == -1) {
-                snprintf(log_details, sizeof(log_details), 
-                         "Failed to close READ end of pipe %d: %s", i, strerror(errno));
-                log_event(WARNING, "IPC", "PIPE_CLOSE_FAIL", log_details);
+            if (pipe_fds[i][READ_END] != -1) {
+                if (close(pipe_fds[i][READ_END]) == -1) {
+                    snprintf(log_details, sizeof(log_details), 
+                             "Failed to close READ end of pipe %d: %s", i, strerror(errno));
+                    log_event(WARNING, "IPC", "PIPE_CLOSE_FAIL", log_details);
+                }
+                pipe_fds[i][READ_END] = -1;
             }
         }
 
         if (!keep_write) {
-            if (close(pipe_fds[i][WRITE_END]) == -1) {
-                snprintf(log_details, sizeof(log_details), 
-                         "Failed to close WRITE end of pipe %d: %s", i, strerror(errno));
-                log_event(WARNING, "IPC", "PIPE_CLOSE_FAIL", log_details);
+            if (pipe_fds[i][WRITE_END] != -1) {
+                if (close(pipe_fds[i][WRITE_END]) == -1) {
+                    snprintf(log_details, sizeof(log_details), 
+                             "Failed to close WRITE end of pipe %d: %s", i, strerror(errno));
+                    log_event(WARNING, "IPC", "PIPE_CLOSE_FAIL", log_details);
+                }
+                pipe_fds[i][WRITE_END] = -1;
             }
         }
     }
@@ -244,6 +253,66 @@ int read_pipe_command(int pipe_id, int *command) {
     return 0;
 }
 
+int send_pipe_string(int pipe_id, const char *str) {
+    if (pipe_id < 0 || pipe_id >= NUM_PIPES) return -1;
+    int fd = pipe_fds[pipe_id][WRITE_END];
+    if (fd < 0) return -1;
+
+    int len = (int)strlen(str) + 1; // Include null terminator
+    
+    // Write length
+    if (write(fd, &len, sizeof(int)) != sizeof(int)) return -1;
+    
+    // Write string
+    size_t total_written = 0;
+    size_t to_write = len;
+    while (total_written < to_write) {
+        ssize_t res = write(fd, str + total_written, to_write - total_written);
+        if (res == -1) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        total_written += res;
+    }
+    return 0;
+}
+
+int read_pipe_string(int pipe_id, char *buffer, size_t size) {
+    if (pipe_id < 0 || pipe_id >= NUM_PIPES) return -1;
+    int fd = pipe_fds[pipe_id][READ_END];
+    if (fd < 0) return -1;
+
+    int len;
+    ssize_t bytes = read(fd, &len, sizeof(int));
+    if (bytes == 0) return 1; // EOF
+    if (bytes == -1) return -1;
+    if (bytes != sizeof(int)) return -1; // Partial read of length?
+
+    if (len > (int)size) {
+        // Buffer too small. We must consume the data to keep pipe consistent, 
+        // but we can't return it all. For now, treat as error.
+        // In a real system, we might discard or realloc.
+        // Let's read what we can and discard the rest.
+        // Actually, let's just return error but try to read it out to clear pipe?
+        // Simpler: assume buffer is big enough (256+).
+        return -1; 
+    }
+
+    size_t total_read = 0;
+    size_t to_read = len;
+    while (total_read < to_read) {
+        ssize_t res = read(fd, buffer + total_read, to_read - total_read);
+        if (res == 0) return 1; // Unexpected EOF
+        if (res == -1) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        total_read += res;
+    }
+    
+    return 0;
+}
+
 int notify_manager_from_signal(int signal_number) {
     int fd = pipe_fds[PIPE_SIGNAL][WRITE_END];
     
@@ -263,15 +332,18 @@ int destroy_all_pipes(void) {
         for (j = 0; j < 2; j++) {
             int fd = pipe_fds[i][j];
 
-            if (close(fd) == -1) {
-                // Update global status to indicate at least one failure occurred
-                status = -1;
+            if (fd != -1) {
+                if (close(fd) == -1) {
+                    // Update global status to indicate at least one failure occurred
+                    status = -1;
 
-                snprintf(log_msg, sizeof(log_msg), 
-                         "Failed to close pipe index %d end %s (FD %d): %s", 
-                         i, (j == READ_END ? "READ" : "WRITE"), fd, strerror(errno));
-                
-                log_event(WARNING, "IPC", "PIPE_DESTROY_FAIL", log_msg);
+                    snprintf(log_msg, sizeof(log_msg), 
+                             "Failed to close pipe index %d end %s (FD %d): %s", 
+                             i, (j == READ_END ? "READ" : "WRITE"), fd, strerror(errno));
+                    
+                    log_event(WARNING, "IPC", "PIPE_DESTROY_FAIL", log_msg);
+                }
+                pipe_fds[i][j] = -1;
             }
         }
     }

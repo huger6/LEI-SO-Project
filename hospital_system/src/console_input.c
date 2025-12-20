@@ -1,22 +1,25 @@
-#include <stdio.h>
+#include <ctype.h>
 #include <string.h>
-#include <strings.h> // For strcasecmp
+#include "../include/console_input.h"
 
 #include "../include/pipes.h"
 #include "../include/log.h"
+#include "../include/config.h"
 
-/**
- * @file console_input.c
- * @brief Handles reading commands from Standard Input (stdin).
- * Parses textual user commands and converts them to internal PIPE_CMD_* integer values.
- * Sends valid commands to the Manager process via PIPE_INPUT.
- * References PDF Section 2.1 (Command Input).
- */
+
+// Helper to trim leading/trailing whitespace
+static char* trim_whitespace(char* str) {
+    char* end;
+    while(isspace((unsigned char)*str)) str++;
+    if(*str == 0) return str;
+    end = str + strlen(str) - 1;
+    while(end > str && isspace((unsigned char)*end)) end--;
+    *(end+1) = 0;
+    return str;
+}
 
 void process_console_input(void) {
     char buffer[256];
-    int command_code;
-    char log_msg[300];
 
     // Log start of input loop
     log_event(INFO, "INPUT", "START", "Console input listener started");
@@ -33,55 +36,99 @@ void process_console_input(void) {
         }
 
         // Reset command code for new iteration
-        command_code = -1;
-
-        // ---------------------------------------------------------
-        // Command Parsing Logic
-        // Maps textual commands to PIPE_CMD_* enums defined in pipes.h
-        // ---------------------------------------------------------
-        
-        if (strcasecmp(buffer, "SHUTDOWN") == 0) {
-            command_code = PIPE_CMD_SHUTDOWN;
-        } 
-        else if (strcasecmp(buffer, "PAUSE") == 0) {
-            command_code = PIPE_CMD_PAUSE;
-        } 
-        else if (strcasecmp(buffer, "RESUME") == 0) {
-            command_code = PIPE_CMD_RESUME;
-        } 
-        else if (strcasecmp(buffer, "STATUS") == 0) {
-            command_code = PIPE_CMD_STATUS;
-        } 
-        else {
-            // Handle unrecognized commands
-            snprintf(log_msg, sizeof(log_msg), "Unrecognized console command: '%s'", buffer);
-            log_event(WARNING, "INPUT", "INVALID_CMD", log_msg);
-            continue;
-        }
+        // command_code = -1;
 
         // ---------------------------------------------------------
         // Command Transmission
-        // Uses the transport mechanism from pipes.c
+        // Sends raw command string to Manager via PIPE_INPUT
         // ---------------------------------------------------------
 
-        if (command_code != -1) {
-            // Send to PIPE_INPUT (corresponds to Manager's input pipe)
-            // Note: send_pipe_command handles the low-level write() and locking if needed
-            if (send_pipe_command(PIPE_INPUT, command_code) == -1) {
-                log_event(ERROR, "INPUT", "SEND_FAIL", "Failed to send command to Manager via pipe");
-            } else {
-                // Optional: Debug log for successful send
-                #ifdef DEBUG
-                    snprintf(log_msg, sizeof(log_msg), "Sent command code %d to Manager", command_code);
-                    log_event(DEBUG, "INPUT", "SENT", log_msg);
-                #endif
-            }
-            
-            // If shutdown was requested, we might want to break the loop 
-            // depending on if this process should terminate immediately or wait for signals.
-            // For now, we continue processing until the pipe is closed or process killed.
+        if (send_pipe_string(PIPE_INPUT, buffer) == -1) {
+            log_event(ERROR, "INPUT", "SEND_FAIL", "Failed to send command to Manager via pipe");
+        } else {
+            #ifdef DEBUG
+                snprintf(log_msg, sizeof(log_msg), "Sent command '%s' to Manager", buffer);
+                log_event(DEBUG, "INPUT", "SENT", log_msg);
+            #endif
         }
     }
     
     log_event(INFO, "INPUT", "STOP", "Console input listener received EOF");
 }
+
+int get_med_id(const char *name) {
+    for (int i = 0; i < config->med_count; i++) {
+        if (strcmp(config->medications[i].name, name) == 0) return i;
+    }
+    return -1;
+}
+
+int get_test_id(const char *name) {
+    if (strcmp(name, "HEMO") == 0) return 0;
+    if (strcmp(name, "GLIC") == 0) return 1;
+    if (strcmp(name, "COLEST") == 0) return 2;
+    if (strcmp(name, "RENAL") == 0) return 3;
+    if (strcmp(name, "HEPAT") == 0) return 4;
+    if (strcmp(name, "PREOP") == 0) return 5;
+    return -1;
+}
+
+int get_specialty_id(const char *name) {
+    if (strcmp(name, "CARDIO") == 0) return 0;
+    if (strcmp(name, "ORTHO") == 0) return 1;
+    if (strcmp(name, "NEURO") == 0) return 2;
+    return -1;
+}
+
+int get_urgency_id(const char *name) {
+    if (strcmp(name, "LOW") == 0) return 0;
+    if (strcmp(name, "MEDIUM") == 1) return 1;
+    if (strcmp(name, "HIGH") == 2) return 2;
+    return 0; // Default
+}
+
+int parse_list_ids(char *str, int *ids, int max_count, int (*map_func)(const char*)) {
+    if (!str || str[0] != '[') return 0;
+    char *content = str + 1;
+    char *end = strchr(content, ']');
+    if (end) *end = '\0';
+    
+    int count = 0;
+    char *token = strtok(content, ",");
+    while (token && count < max_count) {
+        int id = map_func(trim_whitespace(token));
+        if (id != -1) {
+            ids[count++] = id;
+        }
+        token = strtok(NULL, ",");
+    }
+    return count;
+}
+
+int parse_med_qty_list(char *str, int *ids, int *qtys, int max_count) {
+    if (!str || str[0] != '[') return 0;
+    char *content = str + 1;
+    char *end = strchr(content, ']');
+    if (end) *end = '\0';
+    
+    int count = 0;
+    char *token = strtok(content, ",");
+    while (token && count < max_count) {
+        char *colon = strchr(token, ':');
+        if (colon) {
+            *colon = '\0';
+            char *name = token;
+            int qty = atoi(colon + 1);
+            int id = get_med_id(name);
+            if (id != -1) {
+                ids[count] = id;
+                qtys[count] = qty;
+                count++;
+            }
+        }
+        token = strtok(NULL, ",");
+    }
+    return count;
+}
+
+

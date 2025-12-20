@@ -13,9 +13,12 @@ OBJS = $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRCS))
 # Name of the executable
 EXEC = hospital_system
 
-.PHONY: all clean
+.PHONY: all clean debug
 
 all: $(EXEC)
+
+debug: CFLAGS += -DDEBUG -g
+debug: all
 
 $(EXEC): $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^

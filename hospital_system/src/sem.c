@@ -77,6 +77,8 @@ int init_all_semaphores(void) {
     // 4. Pharmacy Access
     if ((sem_pharmacy = _init_single_sem(SEM_NAME_PHARMACY, VAL_PHARMACY)) == SEM_FAILED) return -1;
 
+    log_event(INFO, "IPC", "SEM_CREATE", "All Semaphores successfully initialized");
+
     return 0; // Success
 }
 

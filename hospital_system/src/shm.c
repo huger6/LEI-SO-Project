@@ -2,8 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/ipc.h>
 #include <sys/shm.h>
 #include <pthread.h>
+#include <errno.h>
 
 #include "../include/shm.h"
 
@@ -21,33 +23,40 @@ hospital_shm_t *shm_hospital = NULL;
 
 // Create all SHM IDS (no attach)
 static int create_shm() {
+    char log_buffer[256];
+
     shm_stats_id = shmget(ftok(FTOK_PATH, SHM_STATS_KEY), sizeof(global_statistics_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_stats_id == -1) {
-        log_event(ERROR, "IPC", "SHM", "Failed to create Stats SHM");
+        snprintf(log_buffer, sizeof(log_buffer), "Failed to create Stats SHM: %s", strerror(errno));
+        log_event(ERROR, "IPC", "SHM", log_buffer);
         return -1;
     }
 
     shm_surgery_id = shmget(ftok(FTOK_PATH, SHM_SURG_KEY), sizeof(surgery_block_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_surgery_id == -1) {
-        log_event(ERROR, "IPC", "SHM", "Failed to create Surgery SHM");
+        snprintf(log_buffer, sizeof(log_buffer), "Failed to create Surgery SHM: %s", strerror(errno));
+        log_event(ERROR, "IPC", "SHM", log_buffer);
         return -1;
     }
 
     shm_pharm_id = shmget(ftok(FTOK_PATH, SHM_PHARM_KEY), sizeof(pharmacy_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_pharm_id == -1) {
-        log_event(ERROR, "IPC", "SHM", "Failed to create Pharmacy SHM");
+        snprintf(log_buffer, sizeof(log_buffer), "Failed to create Pharmacy SHM: %s", strerror(errno));
+        log_event(ERROR, "IPC", "SHM", log_buffer);
         return -1;
     }
 
     shm_lab_id = shmget(ftok(FTOK_PATH, SHM_LAB_KEY), sizeof(lab_queue_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_lab_id == -1) {
-        log_event(ERROR, "IPC", "SHM", "Failed to create Lab SHM");
+        snprintf(log_buffer, sizeof(log_buffer), "Failed to create Lab SHM: %s", strerror(errno));
+        log_event(ERROR, "IPC", "SHM", log_buffer);
         return -1;
     }
 
     shm_log_id = shmget(ftok(FTOK_PATH, SHM_LOG_KEY), sizeof(critical_log_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_log_id == -1) {
-        log_event(ERROR, "IPC", "SHM", "Failed to create Log SHM");
+        snprintf(log_buffer, sizeof(log_buffer), "Failed to create Log SHM: %s", strerror(errno));
+        log_event(ERROR, "IPC", "SHM", log_buffer);
         return -1;
     }
 

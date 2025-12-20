@@ -36,6 +36,8 @@ int init_all_pipes(void);
 void close_unused_pipe_ends(int process_role);
 int send_pipe_command(int pipe_id, int command);
 int read_pipe_command(int pipe_id, int *command);
+int send_pipe_string(int pipe_id, const char *str);
+int read_pipe_string(int pipe_id, char *buffer, size_t size);
 int destroy_all_pipes(void);
 int notify_manager_from_signal(int signal_number);
 int get_pipe_read_end(int pipe_id);

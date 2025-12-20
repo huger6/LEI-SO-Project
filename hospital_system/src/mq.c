@@ -21,15 +21,6 @@
 #define PRIORITY_HIGH    2
 #define PRIORITY_NORMAL  3
 
-// FTOK (update mq if changed)
-#define FTOK_PATH       "/tmp/hospital_key"
-
-// Keys
-#define KEY_TRIAGE      "T"
-#define KEY_SURGERY     "S"
-#define KEY_PHARMACY    "P"
-#define KEY_LAB         "L"
-#define KEY_RESPONSES   "R"
 
 // Message Queues Id's
 int mq_triage_id = -1;
@@ -92,7 +83,7 @@ int create_all_message_queues() {
     mq_responses_id = create_single_mq(KEY_RESPONSES, "MQ_RESPONSES");
     if (mq_responses_id == -1) return -1;
 
-    log_event(INFO, "IPC", "MQ_CREATED", "All Message Queues successfully initialized.");
+    log_event(INFO, "IPC", "MQ_CREATED", "All Message Queues successfully initialized");
     return 0;
 }
 
@@ -121,7 +112,7 @@ int remove_all_message_queues() {
     }
 
     if (result == 0) {
-        log_event(INFO, "IPC", "MQ_REMOVED", "All Message Queues successfully removed.");
+        log_event(INFO, "IPC", "MQ_REMOVED", "All Message Queues successfully removed");
     }
     return result;
 }

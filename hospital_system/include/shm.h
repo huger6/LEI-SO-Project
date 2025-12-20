@@ -10,7 +10,7 @@
 #include "log.h"
 
 // FTOK (update mq if changed)
-#define FTOK_PATH     "/tmp/hospital_key"
+#define FTOK_PATH     "config/ipc.txt"
 
 // Shared Memory Keys (Arbitrary chars for ftok)
 #define SHM_STATS_KEY 'S'

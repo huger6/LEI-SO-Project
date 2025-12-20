@@ -13,17 +13,23 @@
 #define PRIORITY_HIGH    2
 #define PRIORITY_NORMAL  3
 
-// FTOK (update mq if changed)
-#define FTOK_PATH       "/tmp/hospital_key"
+// FTOK (update shm if changed)
+#define FTOK_PATH       "config/ipc.txt"
 
 // Keys
-#define KEY_TRIAGE      "T"
-#define KEY_SURGERY     "S"
-#define KEY_PHARMACY    "P"
-#define KEY_LAB         "L"
-#define KEY_RESPONSES   "R"
+#define KEY_TRIAGE      'T'
+#define KEY_SURGERY     'S'
+#define KEY_PHARMACY    'P'
+#define KEY_LAB         'L'
+#define KEY_RESPONSES   'R'
 
-// --- MQ ---
+
+// Message Queues Id's
+extern int mq_triage_id;
+extern int mq_surgery_id;
+extern int mq_pharmacy_id;
+extern int mq_lab_id;
+extern int mq_responses_id;
 
 // Message types
 typedef enum {
@@ -59,16 +65,30 @@ typedef struct {
     msg_header_t hdr;
     int triage_level;
     int stability;
+    int tests_count;
+    int tests_id[3];
+    int meds_count;
+    int meds_id[5];
 } msg_new_emergency_t;
 
 typedef struct {
     msg_header_t hdr;
     int scheduled_time;
+    int doctor_specialty; // 0=CARDIO, 1=ORTHO, 2=NEURO
+    int tests_count;
+    int tests_id[3];
 } msg_new_appointment_t;
 
 typedef struct {
     msg_header_t hdr;
     int estimated_duration;
+    int scheduled_time;
+    int surgery_type; // 0=CARDIO, 1=ORTHO, 2=NEURO
+    int urgency; // 0=LOW, 1=MEDIUM, 2=HIGH
+    int tests_count;
+    int tests_id[5];
+    int meds_count;
+    int meds_id[5];
 } msg_new_surgery_t;
 
 typedef struct {
