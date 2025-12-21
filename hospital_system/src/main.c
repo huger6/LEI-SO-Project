@@ -132,13 +132,6 @@ int main(void) {
             if (i != PIPE_INPUT) close(get_pipe_write_end(i));
         }
 
-        // Override signal handler 
-        // struct sigaction sa_child;
-        // sigemptyset(&sa_child.sa_mask);
-
-        // sa_child.sa_flags = 0;
-        // sa_child.sa_handler = handle_input_shutdown;
-
         process_console_input();
 
         log_event(INFO, "CONSOLE_INPUT", "RESOURCES_CLEANUP", "Cleaning console input receiver resources");
@@ -314,6 +307,19 @@ int main(void) {
                         int status;
                         pid_t pid;
                         while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+                            // Mark pid as waited
+                            if (pid == pid_console_input) {
+                                pid_console_input = -1;
+                            } else if (pid == pid_triage) {
+                                pid_triage = -1;
+                            } else if (pid == pid_surgery) {
+                                pid_surgery = -1;
+                            } else if (pid == pid_pharmacy) {
+                                pid_pharmacy = -1;
+                            } else if (pid == pid_lab) {
+                                pid_lab = -1;
+                            }
+
                             char details[100];
                             if (WIFEXITED(status)) {
                                 snprintf(details, sizeof(details),

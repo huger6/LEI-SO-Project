@@ -7,6 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <errno.h>
 #include <ctype.h>
 
 #include "../include/manager_utils.h"
@@ -90,10 +91,43 @@ void manager_cleanup() {
     log_event(INFO, "SYSTEM", "SHUTDOWN", "Initiating system shutdown");
     
     // Kill children if needed
+
     if (pid_console_input > 0) {
-        kill(pid_console_input, SIGTERM);
-        waitpid(pid_console_input, NULL, 0);
+        if (kill(pid_console_input, SIGTERM) == 0) {
+            waitpid(pid_console_input, NULL, 0);
+        } else if (errno != ESRCH) {
+            log_event(ERROR, "MANAGER", "PROCESS_KILL", "Kill console input process command failed");
+        }
     }
+    if (pid_triage > 0) {
+        if (kill(pid_triage, SIGTERM) == 0) {
+            waitpid(pid_triage, NULL, 0);
+        } else if (errno != ESRCH) {
+            log_event(ERROR, "MANAGER", "PROCESS_KILL", "Kill triage process command failed");
+        }
+    }
+    if (pid_surgery > 0) {
+        if (kill(pid_surgery, SIGTERM) == 0) {
+            waitpid(pid_surgery, NULL, 0);
+        } else if (errno != ESRCH) {
+            log_event(ERROR, "MANAGER", "PROCESS_KILL", "Kill surgery process command failed");
+        }
+    }
+    if (pid_pharmacy > 0) {
+        if (kill(pid_pharmacy, SIGTERM) == 0) {
+            waitpid(pid_pharmacy, NULL, 0);
+        } else if (errno != ESRCH) {
+            log_event(ERROR, "MANAGER", "PROCESS_KILL", "Kill pharmacy process command failed");
+        }
+    }
+    if (pid_lab > 0) {
+        if (kill(pid_lab, SIGTERM) == 0) {
+            waitpid(pid_lab, NULL, 0);
+        } else if (errno != ESRCH) {
+            log_event(ERROR, "MANAGER", "PROCESS_KILL", "Kill laboratory process command failed");
+        }
+    }
+
     // Disable SHM logging before destroying SHM
     set_critical_log_shm_ptr(NULL);
 

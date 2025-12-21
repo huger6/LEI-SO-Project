@@ -139,6 +139,7 @@ int create_all_message_queues();
 int remove_all_message_queues();
 int send_generic_message(int mq_id, const void *msg_ptr, size_t total_struct_size);
 int receive_generic_message(int mq_id, void *msg_buffer, size_t total_struct_size, long max_priority_type);
+int receive_specific_message(int mq_id, void *msg_buffer, size_t total_struct_size, long message_type);
 
 
 #endif

@@ -6,6 +6,7 @@
 // #include <stdarg.h>
 
 #include "../include/log.h"
+#include "../include/safe_threads.h"
 
 
 // Global log file pointer
@@ -99,7 +100,7 @@ void log_event(log_severity_t severity, const char *component, const char *event
     if (severity <= ERROR || (event_type && strcmp(event_type, "SHUTDOWN") == 0)) {
         if (global_log_shm != NULL) {
             // Lock SHM Mutex
-            pthread_mutex_lock(&global_log_shm->mutex);
+            safe_pthread_mutex_lock(&global_log_shm->mutex);
             
             int idx = global_log_shm->current_index;
             
@@ -134,7 +135,7 @@ void log_event(log_severity_t severity, const char *component, const char *event
                 global_log_shm->event_count++;
             }
             
-            pthread_mutex_unlock(&global_log_shm->mutex);
+            safe_pthread_mutex_unlock(&global_log_shm->mutex);
         }
     }
 

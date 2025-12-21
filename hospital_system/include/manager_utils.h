@@ -5,6 +5,8 @@
 #include <sys/types.h>
 
 extern pid_t pid_console_input;
+extern pid_t pid_triage, pid_surgery, pid_pharmacy, pid_lab;
+
 extern volatile sig_atomic_t g_stop_child;
 
 void setup_signal_handlers(void);

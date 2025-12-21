@@ -49,10 +49,10 @@ void add_scheduled_event(int init_time, int mq_id, void *msg, size_t size) {
         new_event->next = current->next;
         current->next = new_event;
     }
-    
+
     char log_msg[128];
     snprintf(log_msg, sizeof(log_msg), "Event scheduled for time %d", init_time);
-    log_event(DEBUG, "SCHEDULER", "EVENT_ADDED", log_msg);
+    log_event(INFO, "SCHEDULER", "EVENT_ADDED", log_msg);
 }
 
 void process_scheduled_events(int current_time) {
@@ -68,10 +68,12 @@ void process_scheduled_events(int current_time) {
             log_event(INFO, "SCHEDULER", "EMERGENCY_SENT", "Emergency sent to triage (scheduled)");
         }
         
-        char log_msg[128];
-        snprintf(log_msg, sizeof(log_msg), "Executed event scheduled for %d at time %d", 
-                 current->init_time, current_time);
-        log_event(DEBUG, "SCHEDULER", "EVENT_EXEC", log_msg);
+        #ifdef DEBUG
+            char log_msg[128];
+            snprintf(log_msg, sizeof(log_msg), "Executed event scheduled for %d at time %d", 
+                    current->init_time, current_time);
+            log_event(DEBUG, "SCHEDULER", "EVENT_EXEC", log_msg);
+        #endif
 
         // Remove from list (head)
         scheduled_events_head = current->next;

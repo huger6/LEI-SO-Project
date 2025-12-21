@@ -166,3 +166,29 @@ int receive_generic_message(int mq_id, void *msg_buffer, size_t total_struct_siz
     // Success, result > 0 is the size of the received message
     return 0;
 }
+
+/**
+ * Receives a specific message type from a Message Queue.
+ * @param mq_id Queue ID.
+ * @param msg_buffer Pointer to the buffer where the message will be stored.
+ * @param total_struct_size sizeof(MESSAGE_TYPE).
+ * @param message_type The specific message type (mtype) to accept.
+ * @return 0 on success, -1 on failure.
+ */
+int receive_specific_message(int mq_id, void *msg_buffer, size_t total_struct_size, long message_type) {
+    size_t payload_size = MSG_SIZE_CALC(total_struct_size);
+    
+    // msgrcv with positive msgtyp: Reads specific message type
+    ssize_t result = msgrcv(mq_id, msg_buffer, payload_size, message_type, 0);
+
+    if (result == -1) {
+        // EINTR: signal interruption
+        if (errno != EINTR) {
+            char desc[128];
+            snprintf(desc, sizeof(desc), "Failed to receive specific message from MQ %d: %s", mq_id, strerror(errno));
+            log_event(ERROR, "IPC", "MSG_RCV_SPECIFIC_FAIL", desc);
+        }
+        return -1;
+    }
+    return 0;
+}

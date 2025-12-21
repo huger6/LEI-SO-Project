@@ -13,6 +13,7 @@
 #include "../include/scheduler.h"
 #include "../include/stats.h"
 #include "../include/manager_utils.h"
+#include "../include/safe_threads.h"
 
 // External global shutdown flag (defined in main.c)
 extern volatile sig_atomic_t g_shutdown;
@@ -438,9 +439,9 @@ void handle_command(char *cmd_buf, int current_time) {
             return;
         }
         
-        pthread_mutex_lock(&shm_hospital->shm_pharm->medications[med_id].mutex);
+        safe_pthread_mutex_lock(&shm_hospital->shm_pharm->medications[med_id].mutex);
         shm_hospital->shm_pharm->medications[med_id].current_stock += qty;
-        pthread_mutex_unlock(&shm_hospital->shm_pharm->medications[med_id].mutex);
+        safe_pthread_mutex_unlock(&shm_hospital->shm_pharm->medications[med_id].mutex);
         
         char log_msg[128];
         snprintf(log_msg, sizeof(log_msg), "Restocked %s with %d units", med_name, qty);

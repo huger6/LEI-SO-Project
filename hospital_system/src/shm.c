@@ -8,6 +8,7 @@
 #include <errno.h>
 
 #include "../include/shm.h"
+#include "../include/safe_threads.h"
 
 // SHM Id's
 int shm_stats_id = -1;
@@ -135,23 +136,23 @@ int init_all_shm() {
     init_stats_default(shm_hospital->shm_stats, &attr);
 
     // Surgery Mutexes
-    pthread_mutex_init(&shm_hospital->shm_surg->teams_mutex, &attr);
+    safe_pthread_mutex_init(&shm_hospital->shm_surg->teams_mutex, &attr);
     for(int i = 0; i < 3; i++) {
-        pthread_mutex_init(&shm_hospital->shm_surg->rooms[i].mutex, &attr);
+        safe_pthread_mutex_init(&shm_hospital->shm_surg->rooms[i].mutex, &attr);
     }
 
     // Pharmacy Mutexes
-    pthread_mutex_init(&shm_hospital->shm_pharm->global_mutex, &attr);
+    safe_pthread_mutex_init(&shm_hospital->shm_pharm->global_mutex, &attr);
     for(int i = 0; i < 15; i++) {
-        pthread_mutex_init(&shm_hospital->shm_pharm->medications[i].mutex, &attr);
+        safe_pthread_mutex_init(&shm_hospital->shm_pharm->medications[i].mutex, &attr);
     }
 
     // Lab Mutexes
-    pthread_mutex_init(&shm_hospital->shm_lab->lab1_mutex, &attr);
-    pthread_mutex_init(&shm_hospital->shm_lab->lab2_mutex, &attr);
+    safe_pthread_mutex_init(&shm_hospital->shm_lab->lab1_mutex, &attr);
+    safe_pthread_mutex_init(&shm_hospital->shm_lab->lab2_mutex, &attr);
 
     // Log Mutex
-    pthread_mutex_init(&shm_hospital->shm_critical_logger->mutex, &attr);
+    safe_pthread_mutex_init(&shm_hospital->shm_critical_logger->mutex, &attr);
 
     pthread_mutexattr_destroy(&attr);
 

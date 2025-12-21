@@ -6,6 +6,7 @@
 
 #include "../include/stats.h"
 #include "../include/log.h"
+#include "../include/safe_threads.h"
 
 // Ptr to track some configs necessary for stats
 static system_config_t *sys_config_ptr = NULL;
@@ -47,7 +48,7 @@ void display_statistics_console(global_statistics_shm_t *stats, const char *comp
     log_event(INFO, "STATS", "DISPLAY", "Displaying statistic to the console");
 
     // Lock mutex for thread safety
-    pthread_mutex_lock(&stats->mutex);
+    safe_pthread_mutex_lock(&stats->mutex);
     
     // Calculate Time Metrics
     char time_buf[30];
@@ -214,7 +215,7 @@ void display_statistics_console(global_statistics_shm_t *stats, const char *comp
     }
     printf("==========================================\n");
 
-    pthread_mutex_unlock(&stats->mutex);
+    safe_pthread_mutex_unlock(&stats->mutex);
 }
 
 void save_statistics_snapshot(global_statistics_shm_t *stats) {
@@ -229,10 +230,10 @@ void init_stats_default(global_statistics_shm_t *stats, pthread_mutexattr_t *att
     if (!stats) return;
 
     memset(stats, 0, sizeof(*stats));
-    pthread_mutex_init(&stats->mutex, attr);
+    safe_pthread_mutex_init(&stats->mutex, attr);
 
     // Lock to ensure safe initialization
-    pthread_mutex_lock(&stats->mutex);
+    safe_pthread_mutex_lock(&stats->mutex);
 
     // --- Triage ---
     stats->total_emergency_patients = 0;
@@ -280,6 +281,6 @@ void init_stats_default(global_statistics_shm_t *stats, pthread_mutexattr_t *att
     stats->system_start_time = time(NULL);
     stats->simulation_time_units = 0;
 
-    pthread_mutex_unlock(&stats->mutex);
+    safe_pthread_mutex_unlock(&stats->mutex);
 }
 
