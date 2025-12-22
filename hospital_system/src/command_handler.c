@@ -16,9 +16,6 @@
 #include "../include/manager_utils.h"
 #include "../include/safe_threads.h"
 
-// External global shutdown flag (defined in main.c)
-extern volatile sig_atomic_t g_shutdown;
-
 void handle_command(char *cmd_buf, int current_time) {
     char *saveptr;
     char *cmd = strtok_r(cmd_buf, " ", &saveptr);

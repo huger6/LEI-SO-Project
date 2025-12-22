@@ -18,6 +18,7 @@
 #include "../include/stats.h"
 #include "../include/safe_threads.h"
 #include "../include/time_simulation.h"
+#include "../include/manager_utils.h"
 
 // --- Constants & Macros ---
 #define MAX_TREATMENT_THREADS 3
@@ -53,8 +54,6 @@ typedef struct {
 
 // --- Globals ---
 
-extern volatile sig_atomic_t g_shutdown;
-
 // Queues
 PatientQueue emergency_queue;
 PatientQueue appointment_queue;
@@ -73,7 +72,9 @@ pthread_t t_treatments[MAX_TREATMENT_THREADS];
 // --- Helper Functions ---
 
 static void wake_all_threads(void) {
-    g_shutdown = 1;
+    safe_pthread_mutex_lock(&treatment_mutex);
+
+    set_shutdown(); // it should be 1, but just to be sure
 
     safe_pthread_cond_broadcast(&patient_ready_cond);
 
@@ -82,6 +83,8 @@ static void wake_all_threads(void) {
     poison_pill.hdr.mtype = MSG_NEW_APPOINTMENT;
     poison_pill.hdr.kind = MSG_SHUTDOWN;
     send_generic_message(mq_triage_id, &poison_pill, sizeof(msg_new_appointment_t));
+
+    safe_pthread_mutex_unlock(&treatment_mutex);
 }
 
 
@@ -166,7 +169,7 @@ void *emergency_queue_manager(void *arg) {
     (void)arg;
 
     msg_new_emergency_t msg;
-    while (!g_shutdown) {
+    while (!check_shutdown()) {
         if (receive_specific_message(mq_triage_id, &msg, sizeof(msg_new_emergency_t), MSG_NEW_EMERGENCY) == -1) {
             if (errno == EINTR) continue;
             log_event(ERROR, "TRIAGE", "MQ_ERROR", "Failed to receive emergency msg");
@@ -221,15 +224,18 @@ void *appointment_queue_manager(void *arg) {
     (void)arg;
 
     msg_new_appointment_t msg;
-    while (!g_shutdown) {
+    while (!check_shutdown()) {
         if (receive_specific_message(mq_triage_id, &msg, sizeof(msg_new_appointment_t), MSG_NEW_APPOINTMENT) == -1) {
             if (errno == EINTR) continue;
             break;
         }
         
         if (msg.hdr.kind == MSG_SHUTDOWN) {
-            g_shutdown = 1;
+            safe_pthread_mutex_lock(&treatment_mutex);
+
             safe_pthread_cond_broadcast(&patient_ready_cond);
+
+            safe_pthread_mutex_unlock(&treatment_mutex);
             break;
         }
 
@@ -272,7 +278,7 @@ void *appointment_queue_manager(void *arg) {
 void *vital_stability_monitor(void *arg) {
     (void)arg;
 
-    while (!g_shutdown) {
+    while (!check_shutdown()) {
         wait_time_units(1); // Sleep 1 time unit
 
         // 1. Check Emergency Queue
@@ -384,15 +390,15 @@ void *treatment_worker(void *arg) {
     int thread_id = *(int*)arg;
     free(arg);
     
-    while (!g_shutdown) {
+    while (!check_shutdown()) {
         TriagePatient *p = NULL;
         
         safe_pthread_mutex_lock(&treatment_mutex);
-        while ((emergency_queue.head == NULL && appointment_queue.head == NULL) && !g_shutdown) {
+        while ((emergency_queue.head == NULL && appointment_queue.head == NULL) && !check_shutdown()) {
             safe_pthread_cond_wait(&patient_ready_cond, &treatment_mutex);
         }
         
-        if (g_shutdown) {
+        if (check_shutdown()) {
             safe_pthread_mutex_unlock(&treatment_mutex);
             break;
         }

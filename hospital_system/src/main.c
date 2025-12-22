@@ -141,7 +141,7 @@ int main(void) {
     } 
     else if (pid_console_input < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork console input process");
-        g_shutdown = 1;
+        set_shutdown();
     }
     else {
         char msg[64];
@@ -162,7 +162,7 @@ int main(void) {
     } 
     else if (pid_triage < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork triage process");
-        g_shutdown = 1;
+        set_shutdown();
     }
     else {
         char msg[64];
@@ -183,7 +183,7 @@ int main(void) {
     }
     else if (pid_surgery < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork surgery process");
-        g_shutdown = 1;
+        set_shutdown();
     }
     else {
         char msg[64];
@@ -204,7 +204,7 @@ int main(void) {
     } 
     else if (pid_pharmacy < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork pharmacy process");
-        g_shutdown = 1;
+        set_shutdown();
     }
     else {
         char msg[64];
@@ -225,7 +225,7 @@ int main(void) {
     }
     else if (pid_lab < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork laboratory process");
-        g_shutdown = 1;
+        set_shutdown();
     }
     else {
         char msg[64];
@@ -233,7 +233,7 @@ int main(void) {
         log_event(INFO, "SYSTEM", "PID_INFO", msg);
     }
 
-    if (!g_shutdown) log_event(INFO, "SYSTEM", "FORK", "All forks were successful");
+    if (!check_shutdown()) log_event(INFO, "SYSTEM", "FORK", "All forks were successful");
 
     // --- Manager Process Setup ---
 
@@ -252,7 +252,7 @@ int main(void) {
     long accumulated_ms = 0;
     int current_logical_time = 0;
 
-    while (!g_shutdown) {
+    while (!check_shutdown()) {
         // 1. Calculate Timeout
         struct timeval timeout;
         struct timeval *timeout_ptr = NULL;
@@ -328,7 +328,7 @@ int main(void) {
                     case SIGINT:
                         {
                             log_event(INFO, "SYSTEM", "SIGINT", "Shutdown signal received");
-                            g_shutdown = 1;
+                            set_shutdown();
 
                             // --- Broadcast SHUTDOWN message ---
                             shutdown_triage();

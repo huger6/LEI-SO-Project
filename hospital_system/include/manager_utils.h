@@ -9,6 +9,9 @@ extern pid_t pid_triage, pid_surgery, pid_pharmacy, pid_lab;
 
 extern volatile sig_atomic_t g_stop_child;
 
+int check_shutdown();
+void set_shutdown();
+
 void setup_signal_handlers(void);
 void setup_child_signals(void);
 int validate_patient_id(const char *id);

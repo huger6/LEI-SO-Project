@@ -18,9 +18,28 @@
 #include "../include/mq.h"
 #include "../include/shm.h"
 #include "../include/scheduler.h"
+#include "../include/safe_threads.h"
 
 extern volatile sig_atomic_t g_shutdown;
 volatile sig_atomic_t g_stop_child = 0;
+
+pthread_mutex_t state_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+int check_shutdown() {
+    int val;
+
+    safe_pthread_mutex_lock(&state_mutex);
+    val = g_shutdown;
+    safe_pthread_mutex_unlock(&state_mutex);
+
+    return val;
+}
+
+void set_shutdown() {
+    safe_pthread_mutex_lock(&state_mutex);
+    g_shutdown = 1;
+    safe_pthread_mutex_unlock(&state_mutex);
+}
 
 // Generic handler that writes to the self-pipe
 static void generic_signal_handler(int sig) {
