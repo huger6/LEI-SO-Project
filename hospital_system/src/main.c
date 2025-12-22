@@ -20,6 +20,7 @@
 #include "../include/stats.h" 
 #include "../include/log.h"
 #include "../include/console_input.h"
+#include "../include/safe_threads.h"
 
 // New headers
 #include "../include/scheduler.h"
@@ -142,10 +143,16 @@ int main(void) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork console input process");
         g_shutdown = 1;
     }
+    else {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Console Input process started with PID %d", pid_console_input);
+        log_event(INFO, "SYSTEM", "PID_INFO", msg);
+    }
 
     // Triage
     pid_triage = fork();
     if (pid_triage == 0) {
+        setup_child_signals();
         close_unused_pipe_ends(ROLE_TRIAGE);
         triage_main();
 
@@ -157,10 +164,16 @@ int main(void) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork triage process");
         g_shutdown = 1;
     }
+    else {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Triage process started with PID %d", pid_triage);
+        log_event(INFO, "SYSTEM", "PID_INFO", msg);
+    }
 
     // Surgery
     pid_surgery = fork();
     if (pid_surgery == 0) {
+        setup_child_signals();
         close_unused_pipe_ends(ROLE_SURGERY);
         surgery_main();
 
@@ -172,10 +185,16 @@ int main(void) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork surgery process");
         g_shutdown = 1;
     }
+    else {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Surgery process started with PID %d", pid_surgery);
+        log_event(INFO, "SYSTEM", "PID_INFO", msg);
+    }
 
     // Pharmacy
     pid_pharmacy = fork();
     if (pid_pharmacy == 0) {
+        setup_child_signals();
         close_unused_pipe_ends(ROLE_PHARMACY);
         pharmacy_main();
 
@@ -187,10 +206,16 @@ int main(void) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork pharmacy process");
         g_shutdown = 1;
     }
+    else {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Pharmacy process started with PID %d", pid_pharmacy);
+        log_event(INFO, "SYSTEM", "PID_INFO", msg);
+    }
 
     // Lab
     pid_lab = fork();
     if (pid_lab == 0) {
+        setup_child_signals();
         close_unused_pipe_ends(ROLE_LAB);
         lab_main();
 
@@ -201,6 +226,11 @@ int main(void) {
     else if (pid_lab < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork laboratory process");
         g_shutdown = 1;
+    }
+    else {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Lab process started with PID %d", pid_lab);
+        log_event(INFO, "SYSTEM", "PID_INFO", msg);
     }
 
     if (!g_shutdown) log_event(INFO, "SYSTEM", "FORK", "All forks were successful");
@@ -268,7 +298,12 @@ int main(void) {
         if (ticks_passed > 0) {
             current_logical_time += ticks_passed;
             accumulated_ms %= config->time_unit_ms;
-            
+
+            // Update global clock time
+            safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
+            shm_hospital->shm_stats->simulation_time_units = current_logical_time;
+            safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
+
             #ifdef DEBUG
                 char tick_msg[50];
                 snprintf(tick_msg, sizeof(tick_msg), "Tick: %d", current_logical_time);
@@ -291,8 +326,13 @@ int main(void) {
             if (read(fd_signal, &sig, sizeof(int)) > 0) {
                 switch (sig) {
                     case SIGINT:
-                        log_event(INFO, "SYSTEM", "SIGINT", "Shutdown signal received");
-                        g_shutdown = 1;
+                        {
+                            log_event(INFO, "SYSTEM", "SIGINT", "Shutdown signal received");
+                            g_shutdown = 1;
+
+                            // --- Broadcast SHUTDOWN message ---
+                            shutdown_triage();
+                        }
                         break;
 
                     case SIGUSR1:

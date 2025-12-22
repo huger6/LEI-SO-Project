@@ -31,7 +31,8 @@ typedef struct TriagePatient {
     int type; // PATIENT_TYPE_EMERGENCY or PATIENT_TYPE_APPOINTMENT
     int priority; // 1-5 (1 is highest)
     int stability;
-    int arrival_time; // or scheduled_time
+    int arrival_time;
+    int scheduled_time; // only for appointments
     int is_critical; // 0 or 1
     
     // Medical Data
@@ -70,6 +71,19 @@ pthread_t t_vital_monitor;
 pthread_t t_treatments[MAX_TREATMENT_THREADS];
 
 // --- Helper Functions ---
+
+static void wake_all_threads(void) {
+    g_shutdown = 1;
+
+    safe_pthread_cond_broadcast(&patient_ready_cond);
+
+    msg_new_appointment_t poison_pill;
+    memset(&poison_pill, 0, sizeof(msg_new_appointment_t));
+    poison_pill.hdr.mtype = MSG_NEW_APPOINTMENT;
+    poison_pill.hdr.kind = MSG_SHUTDOWN;
+    send_generic_message(mq_triage_id, &poison_pill, sizeof(msg_new_appointment_t));
+}
+
 
 void init_queue(PatientQueue *q) {
     q->head = NULL;
@@ -121,7 +135,7 @@ void insert_emergency_sorted(TriagePatient *p) {
 void insert_appointment_sorted(TriagePatient *p) {
     TriagePatient **curr = &appointment_queue.head;
     while (*curr) {
-        if (p->arrival_time < (*curr)->arrival_time) {
+        if (p->scheduled_time < (*curr)->scheduled_time) {
             break;
         }
         curr = &(*curr)->next;
@@ -160,8 +174,7 @@ void *emergency_queue_manager(void *arg) {
         }
         
         if (msg.hdr.kind == MSG_SHUTDOWN) {
-            g_shutdown = 1;
-            safe_pthread_cond_broadcast(&patient_ready_cond);
+            wake_all_threads();
             break;
         }
 
@@ -182,7 +195,7 @@ void *emergency_queue_manager(void *arg) {
         p->type = PATIENT_TYPE_EMERGENCY;
         p->priority = msg.triage_level;
         p->stability = msg.stability;
-        p->arrival_time = (int)msg.hdr.timestamp; // Using timestamp as arrival
+        p->arrival_time = get_simulation_time();
         p->is_critical = (p->stability <= config->triage_critical_stability);
         p->tests_count = msg.tests_count;
         memcpy(p->tests_id, msg.tests_id, sizeof(p->tests_id));
@@ -223,7 +236,7 @@ void *appointment_queue_manager(void *arg) {
         safe_pthread_mutex_lock(&appointment_queue.mutex);
         if (appointment_queue.count >= config->max_appointments) {
             log_event(WARNING, "TRIAGE", "REJECTED_APPT", msg.hdr.patient_id);
-             safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
+            safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
             shm_hospital->shm_stats->rejected_patients++;
             safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
             safe_pthread_mutex_unlock(&appointment_queue.mutex);
@@ -234,8 +247,9 @@ void *appointment_queue_manager(void *arg) {
         strcpy(p->id, msg.hdr.patient_id);
         p->type = PATIENT_TYPE_APPOINTMENT;
         p->priority = 5; // Lowest priority default
-        p->stability = 100; // Default stability for appointments?
-        p->arrival_time = msg.scheduled_time;
+        p->stability = 1000; // Max stability
+        p->arrival_time = get_simulation_time();
+        p->scheduled_time = msg.scheduled_time;
         p->is_critical = 0;
         p->tests_count = msg.tests_count;
         memcpy(p->tests_id, msg.tests_id, sizeof(p->tests_id));
@@ -415,12 +429,23 @@ void *treatment_worker(void *arg) {
         log_event(INFO, "TRIAGE", "TREATMENT_START", p->id);
         
         // Calculate Wait Time
-        double wait_time = difftime(time(NULL), (time_t)p->arrival_time);
+        int current_time = get_simulation_time();
+        int wait_time = 0;
+        
+        if (p->type == PATIENT_TYPE_APPOINTMENT) {
+            // For appointments, wait time is delay after scheduled time
+            wait_time = diff_time_units(p->scheduled_time, current_time);
+            if (wait_time < 0) wait_time = 0;
+        } else {
+            // For emergencies, wait time is delay after arrival
+            wait_time = diff_time_units(p->arrival_time, current_time);
+        }
+
         safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
         if (p->type == PATIENT_TYPE_EMERGENCY) {
-            shm_hospital->shm_stats->total_emergency_wait_time += wait_time;
+            shm_hospital->shm_stats->total_emergency_wait_time += (double)wait_time;
         } else {
-            shm_hospital->shm_stats->total_appointment_wait_time += wait_time;
+            shm_hospital->shm_stats->total_appointment_wait_time += (double)wait_time;
         }
         safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
         
@@ -493,24 +518,23 @@ void triage_main(void) {
     init_queue(&appointment_queue);
     
     // Start Threads
-    pthread_create(&t_emergency_mgr, NULL, emergency_queue_manager, NULL);
-    pthread_create(&t_appointment_mgr, NULL, appointment_queue_manager, NULL);
-    pthread_create(&t_vital_monitor, NULL, vital_stability_monitor, NULL);
+    safe_pthread_create(&t_emergency_mgr, NULL, emergency_queue_manager, NULL);
+    safe_pthread_create(&t_appointment_mgr, NULL, appointment_queue_manager, NULL);
+    safe_pthread_create(&t_vital_monitor, NULL, vital_stability_monitor, NULL);
     
     for (int i = 0; i < MAX_TREATMENT_THREADS; i++) {
         int *arg = malloc(sizeof(int));
         *arg = i;
-        pthread_create(&t_treatments[i], NULL, treatment_worker, arg);
+        safe_pthread_create(&t_treatments[i], NULL, treatment_worker, arg);
     }
-    
+
     // Wait for shutdown
-    pthread_join(t_emergency_mgr, NULL);
-    pthread_join(t_appointment_mgr, NULL);
-    pthread_join(t_vital_monitor, NULL);
+    safe_pthread_join(t_emergency_mgr, NULL);
+    safe_pthread_join(t_appointment_mgr, NULL);
+    safe_pthread_join(t_vital_monitor, NULL);
     for (int i = 0; i < MAX_TREATMENT_THREADS; i++) {
-        pthread_join(t_treatments[i], NULL);
+        safe_pthread_join(t_treatments[i], NULL);
     }
     
     log_event(INFO, "TRIAGE", "SHUTDOWN", "Triage process finished");
-    exit(EXIT_SUCCESS);
 }

@@ -17,7 +17,9 @@
 #include "../include/config.h"
 #include "../include/mq.h"
 #include "../include/shm.h"
+#include "../include/scheduler.h"
 
+extern volatile sig_atomic_t g_shutdown;
 volatile sig_atomic_t g_stop_child = 0;
 
 // Generic handler that writes to the self-pipe
@@ -29,6 +31,7 @@ static void generic_signal_handler(int sig) {
 static void child_signal_handler(int sig) {
     (void)sig;
     g_stop_child = 1;
+    g_shutdown = 1;
 }
 
 // Setup all signal handlers
@@ -52,10 +55,17 @@ void setup_child_signals(void) {
     struct sigaction sa;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0; // No SA_RESTART to interrupt blocking calls
+
     sa.sa_handler = child_signal_handler;
 
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+
+    // User defined signals
+    sa.sa_handler = SIG_IGN;
+
+    sigaction(SIGUSR1, &sa, NULL);
+    sigaction(SIGUSR2, &sa, NULL);
 }
 
 // Returns 1 if valid, 0 if invalid
@@ -131,6 +141,7 @@ void manager_cleanup() {
     // Disable SHM logging before destroying SHM
     set_critical_log_shm_ptr(NULL);
 
+    cleanup_scheduler();
     cleanup_all_shm();
     remove_all_message_queues();
     destroy_all_pipes();
@@ -141,4 +152,18 @@ void manager_cleanup() {
     log_event(INFO, "SYSTEM", "SHUTDOWN", "Shutdown was successful. Goodbye");
 
     close_logging();
+}
+
+void shutdown_triage() {
+    // We only send to one thread
+    // The others are taken care of inside the process
+    msg_new_emergency_t poison_pill;
+    memset(&poison_pill, 0, sizeof(msg_new_emergency_t));
+    poison_pill.hdr.mtype = MSG_NEW_EMERGENCY;
+    poison_pill.hdr.kind = MSG_SHUTDOWN;
+    if (send_generic_message(mq_triage_id, &poison_pill, sizeof(msg_new_emergency_t)) == 0) {
+        log_event(INFO, "SHUTDOWN", "BROADCAST", "SHUTDOWN message sent to triage");
+    } else {
+        log_event(ERROR, "SHUTDOWN", "BROADCAST", "Failed to broadcast SHUTDOWN message to triage");
+    }
 }

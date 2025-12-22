@@ -34,6 +34,19 @@ clean:
 	[ -d results ] && find results -type f -delete || true
 	rm -f logs/hospital_log.txt
 
+ipc_clean:
+	@echo "Removing IPC resources for user $$(whoami)"
+	-@ipcs -m | grep $$(whoami) | awk '{print $$2}' | xargs -r ipcrm -m 2>/dev/null || true
+	
+	-@ipcs -s | grep $$(whoami) | awk '{print $$2}' | xargs -r ipcrm -s 2>/dev/null || true
+	
+	-@ipcs -q | grep $$(whoami) | awk '{print $$2}' | xargs -r ipcrm -q 2>/dev/null || true
+	
+	-@rm -f /dev/shm/* 2>/dev/null || true
+	-@rm -f /dev/mqueue/* 2>/dev/null || true
+	
+	@echo "Cleanup completed."
+
 # --- Tests ---
 
 # Memory leaks

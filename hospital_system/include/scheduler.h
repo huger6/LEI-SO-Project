@@ -15,4 +15,7 @@ int get_next_scheduled_time(void);
 // Returns 1 if there are scheduled events, 0 otherwise
 int has_scheduled_events(void);
 
+// Frees all scheduled events
+void cleanup_scheduler(void);
+
 #endif

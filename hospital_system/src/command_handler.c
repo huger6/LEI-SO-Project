@@ -3,6 +3,7 @@
 #include <string.h>
 #include <strings.h>
 #include <signal.h>
+#include <unistd.h>
 #include <pthread.h>
 
 #include "../include/command_handler.h"
@@ -24,7 +25,7 @@ void handle_command(char *cmd_buf, int current_time) {
     if (!cmd) return;
 
     if (strcasecmp(cmd, "SHUTDOWN") == 0) {
-        g_shutdown = 1;
+        kill(getpid(), SIGINT);
     }
     else if (strcasecmp(cmd, "STATUS") == 0) {
         char *component = strtok_r(NULL, " ", &saveptr);
@@ -106,7 +107,7 @@ void handle_command(char *cmd_buf, int current_time) {
         
         if (msg.hdr.timestamp <= current_time) {
             send_generic_message(mq_triage_id, &msg, sizeof(msg));
-            log_event(INFO, "MANAGER", "EMERGENCY_SENT", "Emergency sent to triage on the spot");
+            log_event(INFO, "MANAGER", "EMERGENCY_SENT", "Emergency sent to triage");
         } else {
             add_scheduled_event((int)msg.hdr.timestamp, mq_triage_id, &msg, sizeof(msg));
         }

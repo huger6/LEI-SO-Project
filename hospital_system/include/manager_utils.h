@@ -16,4 +16,6 @@ int validate_patient_id(const char *id);
 void child_cleanup();
 void manager_cleanup();
 
+void shutdown_triage();
+
 #endif

@@ -93,3 +93,16 @@ int get_next_scheduled_time(void) {
 int has_scheduled_events(void) {
     return (scheduled_events_head != NULL);
 }
+
+void cleanup_scheduler(void) {
+    while (scheduled_events_head) {
+        ScheduledEvent *temp = scheduled_events_head;
+        scheduled_events_head = scheduled_events_head->next;
+        
+        if (temp->msg_data) {
+            free(temp->msg_data);
+        }
+        free(temp);
+    }
+    log_event(INFO, "SCHEDULER", "CLEANUP", "Scheduler resources freed");
+}
