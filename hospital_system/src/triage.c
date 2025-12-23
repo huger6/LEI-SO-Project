@@ -287,6 +287,7 @@ void *vital_stability_monitor(void *arg) {
         TriagePatient *prev = NULL;
         
         while (curr) {
+            // Decrement 1 point of stability per 1 time unit passed
             curr->stability--;
             
             // Check Death/Transfer

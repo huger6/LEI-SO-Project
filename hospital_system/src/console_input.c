@@ -67,7 +67,9 @@ void process_console_input(void) {
 
 int get_med_id(const char *name) {
     for (int i = 0; i < config->med_count; i++) {
-        if (strcmp(config->medications[i].name, name) == 0) return i;
+        if (strcmp(config->medications[i].name, name) == 0) {
+            return i;
+        }
     }
     return -1;
 }
@@ -91,9 +93,9 @@ int get_specialty_id(const char *name) {
 
 int get_urgency_id(const char *name) {
     if (strcmp(name, "LOW") == 0) return 0;
-    if (strcmp(name, "MEDIUM") == 1) return 1;
-    if (strcmp(name, "HIGH") == 2) return 2;
-    return 0; // Default
+    if (strcmp(name, "MEDIUM") == 0) return 1;
+    if (strcmp(name, "HIGH") == 0) return 2;
+    return -1; // Invalid urgency
 }
 
 int parse_list_ids(char *str, int *ids, int max_count, int (*map_func)(const char*)) {

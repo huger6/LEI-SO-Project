@@ -103,6 +103,20 @@ int safe_pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
     return status;
 }
 
+int safe_pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime) {
+    int status = pthread_cond_timedwait(cond, mutex, abstime);
+    
+    if (status != 0) {
+        // Caller decides
+        if (status != ETIMEDOUT) {
+            char error_msg[256];
+            snprintf(error_msg, sizeof(error_msg), "pthread_cond_timedwait failed: %s", strerror(status));
+            log_event(ERROR, LOG_COMPONENT, "COND_TIMEDWAIT_FAIL", error_msg);
+        }
+    }
+    return status;
+}
+
 int safe_pthread_cond_signal(pthread_cond_t *cond) {
     int status = pthread_cond_signal(cond);
     if (status != 0) {

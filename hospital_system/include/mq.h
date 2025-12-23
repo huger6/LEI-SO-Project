@@ -106,7 +106,7 @@ typedef struct {
 typedef struct {
     msg_header_t hdr;
     int tests_count;
-    int tests_id[4];
+    int tests_id[5];
 } msg_lab_request_t;
 
 typedef struct {
