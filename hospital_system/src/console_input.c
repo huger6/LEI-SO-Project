@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <errno.h>
+#include <unistd.h>
 #include "../include/console_input.h"
 
 #include "../include/pipes.h"
@@ -21,6 +22,13 @@ static char* trim_whitespace(char* str) {
 }
 
 void process_console_input(void) {
+    // Close all read ends
+    for(int i = 0; i < 6; i++) close(get_pipe_read_end(i));
+    // Close all write ends except INPUT
+    for(int i = 0; i < 6; i++) {
+        if (i != PIPE_INPUT) close(get_pipe_write_end(i));
+    }
+
     char buffer[256];
 
     // Setup signal handlers for child process (no SA_RESTART)
@@ -62,7 +70,13 @@ void process_console_input(void) {
         }
     }
     
-    log_event(INFO, "INPUT", "STOP", "Console input listener received EOF");
+    log_event(INFO, "INPUT", "STOP", "Console input listener shutting down");
+
+    // Resources cleanup
+    log_event(INFO, "CONSOLE_INPUT", "RESOURCES_CLEANUP", "Cleaning console input receiver resources");
+    child_cleanup();
+
+    exit(EXIT_SUCCESS);
 }
 
 int get_med_id(const char *name) {

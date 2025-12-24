@@ -28,8 +28,7 @@ void handle_command(char *cmd_buf, int current_time) {
         char *component = strtok_r(NULL, " ", &saveptr);
         if (!component) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "STATUS: Missing component");
-            printf("Format: STATUS <component>\n");
-            printf("  <component>: ALL | TRIAGE | SURGERY | PHARMACY | LAB\n");
+            print_status_format();
             return;
         }
         
@@ -39,8 +38,7 @@ void handle_command(char *cmd_buf, int current_time) {
             strcasecmp(component, "PHARMACY") != 0 &&
             strcasecmp(component, "LAB") != 0) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "STATUS: Invalid component");
-            printf("Format: STATUS <component>\n");
-            printf("  <component>: ALL | TRIAGE | SURGERY | PHARMACY | LAB\n");
+            print_status_format();
             return;
         }
         
@@ -50,13 +48,13 @@ void handle_command(char *cmd_buf, int current_time) {
         char *code = strtok_r(NULL, " ", &saveptr);
         if (!code) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "EMERGENCY: Missing code");
-            printf("Format: EMERGENCY <patient_id> init: <time> triage: <1-5> stability: <value> [tests: <test1,test2,...>] [meds: <med1,med2,...>]\n");
+            print_emergency_format();
             return;
         }
         
-        if (!validate_patient_id(code)) {
-            log_event(WARNING, "MANAGER", "INVALID_CMD", "EMERGENCY: Invalid patient ID format");
-            printf("Format: EMERGENCY <patient_id> init: <time> triage: <1-5> stability: <value> [tests: <test1,test2,...>] [meds: <med1,med2,...>]\n");
+        if (!validate_id(code, ID_TYPE_PATIENT)) {
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "EMERGENCY: Invalid patient ID format (expected PAC{number})");
+            print_emergency_format();
             return;
         }
         
@@ -93,17 +91,17 @@ void handle_command(char *cmd_buf, int current_time) {
         
         if (!has_init || init < 0) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "EMERGENCY: Invalid/Missing init time");
-            printf("Format: EMERGENCY <patient_id> init: <time> triage: <1-5> stability: <value> [tests: <test1,test2,...>] [meds: <med1,med2,...>]\n");
+            print_emergency_format();
             return;
         }
         if (!has_triage || triage < 1 || triage > 5) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "EMERGENCY: Invalid/Missing triage (1-5)");
-            printf("Format: EMERGENCY <patient_id> init: <time> triage: <1-5> stability: <value> [tests: <test1,test2,...>] [meds: <med1,med2,...>]\n");
+            print_emergency_format();
             return;
         }
         if (!has_stability || stability < 100) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "EMERGENCY: Invalid/Missing stability (>=100)");
-            printf("Format: EMERGENCY <patient_id> init: <time> triage: <1-5> stability: <value> [tests: <test1,test2,...>] [meds: <med1,med2,...>]\n");
+            print_emergency_format();
             return;
         }
 
@@ -122,15 +120,13 @@ void handle_command(char *cmd_buf, int current_time) {
         char *code = strtok_r(NULL, " ", &saveptr);
         if (!code) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "APPOINTMENT: Missing code");
-            printf("Format: APPOINTMENT <patient_id> init: <time> scheduled: <time> doctor: <specialty> [tests: <test1,test2,...>]\n");
-            printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
+            print_appointment_format();
             return;
         }
         
-        if (!validate_patient_id(code)) {
-            log_event(WARNING, "MANAGER", "INVALID_CMD", "APPOINTMENT: Invalid patient ID format");
-            printf("Format: APPOINTMENT <patient_id> init: <time> scheduled: <time> doctor: <specialty> [tests: <test1,test2,...>]\n");
-            printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
+        if (!validate_id(code, ID_TYPE_PATIENT)) {
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "APPOINTMENT: Invalid patient ID format (expected PAC{number})");
+            print_appointment_format();
             return;
         }
         
@@ -167,20 +163,17 @@ void handle_command(char *cmd_buf, int current_time) {
         
         if (!has_init || init < 0) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "APPOINTMENT: Invalid/Missing init time");
-            printf("Format: APPOINTMENT <patient_id> init: <time> scheduled: <time> doctor: <specialty> [tests: <test1,test2,...>]\n");
-            printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
+            print_appointment_format();
             return;
         }
         if (!has_scheduled || scheduled <= current_time + init) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "APPOINTMENT: Invalid/Missing scheduled time (> init + current_time)");
-            printf("Format: APPOINTMENT <patient_id> init: <time> scheduled: <time> doctor: <specialty> [tests: <test1,test2,...>]\n");
-            printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
+            print_appointment_format();
             return;
         }
         if (!has_doctor) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "APPOINTMENT: Invalid/Missing doctor (CARDIO/ORTHO/NEURO)");
-            printf("Format: APPOINTMENT <patient_id> init: <time> scheduled: <time> doctor: <specialty> [tests: <test1,test2,...>]\n");
-            printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
+            print_appointment_format();
             return;
         }
 
@@ -198,19 +191,13 @@ void handle_command(char *cmd_buf, int current_time) {
         char *code = strtok_r(NULL, " ", &saveptr);
         if (!code) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Missing code");
-            printf("Format: SURGERY <patient_id> init: <time> type: <specialty> scheduled: <time> urgency: <level> tests: <test1,test2,...> meds: <med1,med2,...>\n");
-            printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
-            printf("  <level>: LOW | MEDIUM | HIGH\n");
-            printf("  Note: PREOP test is required\n");
+            print_surgery_format();
             return;
         }
         
-        if (!validate_patient_id(code)) {
-            log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Invalid patient ID format");
-            printf("Format: SURGERY <patient_id> init: <time> type: <specialty> scheduled: <time> urgency: <level> tests: <test1,test2,...> meds: <med1,med2,...>\n");
-            printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
-            printf("  <level>: LOW | MEDIUM | HIGH\n");
-            printf("  Note: PREOP test is required\n");
+        if (!validate_id(code, ID_TYPE_PATIENT)) {
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Invalid patient ID format (expected PAC{number})");
+            print_surgery_format();
             return;
         }
         
@@ -257,34 +244,22 @@ void handle_command(char *cmd_buf, int current_time) {
         
         if (!has_init || init < 0) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Invalid/Missing init time");
-            printf("Format: SURGERY <patient_id> init: <time> type: <specialty> scheduled: <time> urgency: <level> tests: <test1,test2,...> meds: <med1,med2,...>\n");
-            printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
-            printf("  <level>: LOW | MEDIUM | HIGH\n");
-            printf("  Note: PREOP test is required\n");
+            print_surgery_format();
             return;
         }
         if (!has_scheduled || scheduled < init) {
-            log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Invalid/Missing scheduled time < init");
-            printf("Format: SURGERY <patient_id> init: <time> type: <specialty> scheduled: <time> urgency: <level> tests: <test1,test2,...> meds: <med1,med2,...>\n");
-            printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
-            printf("  <level>: LOW | MEDIUM | HIGH\n");
-            printf("  Note: PREOP test is required\n");
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Invalid/Missing or scheduled time < init");
+            print_surgery_format();
             return;
         }
         if (!has_type) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Invalid/Missing type (CARDIO/ORTHO/NEURO)");
-            printf("Format: SURGERY <patient_id> init: <time> type: <specialty> scheduled: <time> urgency: <level> tests: <test1,test2,...> meds: <med1,med2,...>\n");
-            printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
-            printf("  <level>: LOW | MEDIUM | HIGH\n");
-            printf("  Note: PREOP test is required\n");
+            print_surgery_format();
             return;
         }
         if (!has_urgency) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Invalid/Missing urgency (LOW/MEDIUM/HIGH)");
-            printf("Format: SURGERY <patient_id> init: <time> type: <specialty> scheduled: <time> urgency: <level> tests: <test1,test2,...> meds: <med1,med2,...>\n");
-            printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
-            printf("  <level>: LOW | MEDIUM | HIGH\n");
-            printf("  Note: PREOP test is required\n");
+            print_surgery_format();
             return;
         }
         
@@ -296,10 +271,7 @@ void handle_command(char *cmd_buf, int current_time) {
         }
         if (!has_preop) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Missing PREOP test");
-            printf("Format: SURGERY <patient_id> init: <time> type: <specialty> scheduled: <time> urgency: <level> tests: <test1,test2,...> meds: <med1,med2,...>\n");
-            printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
-            printf("  <level>: LOW | MEDIUM | HIGH\n");
-            printf("  Note: PREOP test is required\n");
+            print_surgery_format();
             return;
         }
         
@@ -307,10 +279,7 @@ void handle_command(char *cmd_buf, int current_time) {
         
         if (msg.meds_count < 1) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "SURGERY: Missing medications");
-            printf("Format: SURGERY <patient_id> init: <time> type: <specialty> scheduled: <time> urgency: <level> tests: <test1,test2,...> meds: <med1,med2,...>\n");
-            printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
-            printf("  <level>: LOW | MEDIUM | HIGH\n");
-            printf("  Note: PREOP test is required\n");
+            print_surgery_format();
             return;
         }
 
@@ -346,15 +315,13 @@ void handle_command(char *cmd_buf, int current_time) {
         char *code = strtok_r(NULL, " ", &saveptr);
         if (!code) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "PHARMACY_REQUEST: Missing code");
-            printf("Format: PHARMACY_REQUEST <patient_id> init: <time> priority: <priority> items: <med1:qty1,med2:qty2,...>\n");
-            printf("  <priority>: URGENT | HIGH | NORMAL\n");
+            print_pharmacy_format();
             return;
         }
         
-        if (!validate_patient_id(code)) {
-            log_event(WARNING, "MANAGER", "INVALID_CMD", "PHARMACY_REQUEST: Invalid patient ID format");
-            printf("Format: PHARMACY_REQUEST <patient_id> init: <time> priority: <priority> items: <med1:qty1,med2:qty2,...>\n");
-            printf("  <priority>: URGENT | HIGH | NORMAL\n");
+        if (!validate_id(code, ID_TYPE_PHARMACY)) {
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "PHARMACY_REQUEST: Invalid request ID format (expected REQ{number})");
+            print_pharmacy_format();
             return;
         }
         
@@ -390,14 +357,12 @@ void handle_command(char *cmd_buf, int current_time) {
         
         if (!has_init || init < 0) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "PHARMACY_REQUEST: Invalid/Missing init time");
-            printf("Format: PHARMACY_REQUEST <patient_id> init: <time> priority: <priority> items: <med1:qty1,med2:qty2,...>\n");
-            printf("  <priority>: URGENT | HIGH | NORMAL\n");
+            print_pharmacy_format();
             return;
         }
         if (!has_priority) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "PHARMACY_REQUEST: Invalid/Missing priority");
-            printf("Format: PHARMACY_REQUEST <patient_id> init: <time> priority: <priority> items: <med1:qty1,med2:qty2,...>\n");
-            printf("  <priority>: URGENT | HIGH | NORMAL\n");
+            print_pharmacy_format();
             return;
         }
 
@@ -414,17 +379,13 @@ void handle_command(char *cmd_buf, int current_time) {
         char *code = strtok_r(NULL, " ", &saveptr);
         if (!code) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "LAB_REQUEST: Missing code");
-            printf("Format: LAB_REQUEST <patient_id> init: <time> priority: <priority> lab: <lab> tests: <test1,test2,...>\n");
-            printf("  <priority>: URGENT | NORMAL\n");
-            printf("  <lab>: LAB1 | LAB2 | BOTH\n");
+            print_lab_format();
             return;
         }
         
-        if (!validate_patient_id(code)) {
-            log_event(WARNING, "MANAGER", "INVALID_CMD", "LAB_REQUEST: Invalid patient ID format");
-            printf("Format: LAB_REQUEST <patient_id> init: <time> priority: <priority> lab: <lab> tests: <test1,test2,...>\n");
-            printf("  <priority>: URGENT | NORMAL\n");
-            printf("  <lab>: LAB1 | LAB2 | BOTH\n");
+        if (!validate_id(code, ID_TYPE_LAB)) {
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "LAB_REQUEST: Invalid lab ID format (expected LAB{number})");
+            print_lab_format();
             return;
         }
         
@@ -432,6 +393,7 @@ void handle_command(char *cmd_buf, int current_time) {
         memset(&msg, 0, sizeof(msg));
         msg.hdr.mtype = 1;
         msg.hdr.kind = MSG_LAB_REQUEST;
+        msg.sender = SENT_BY_MANAGER;
         strncpy(msg.hdr.patient_id, code, sizeof(msg.hdr.patient_id) - 1);
         
         int init = -1;
@@ -468,23 +430,17 @@ void handle_command(char *cmd_buf, int current_time) {
         
         if (!has_init || init < 0) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "LAB_REQUEST: Invalid/Missing init time");
-            printf("Format: LAB_REQUEST <patient_id> init: <time> priority: <priority> lab: <lab> tests: <test1,test2,...>\n");
-            printf("  <priority>: URGENT | NORMAL\n");
-            printf("  <lab>: LAB1 | LAB2 | BOTH\n");
+            print_lab_format();
             return;
         }
         if (!has_priority) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "LAB_REQUEST: Invalid/Missing priority (URGENT/NORMAL)");
-            printf("Format: LAB_REQUEST <patient_id> init: <time> priority: <priority> lab: <lab> tests: <test1,test2,...>\n");
-            printf("  <priority>: URGENT | NORMAL\n");
-            printf("  <lab>: LAB1 | LAB2 | BOTH\n");
+            print_lab_format();
             return;
         }
         if (!has_lab) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "LAB_REQUEST: Invalid/Missing lab (LAB1/LAB2/BOTH)");
-            printf("Format: LAB_REQUEST <patient_id> init: <time> priority: <priority> lab: <lab> tests: <test1,test2,...>\n");
-            printf("  <priority>: URGENT | NORMAL\n");
-            printf("  <lab>: LAB1 | LAB2 | BOTH\n");
+            print_lab_format();
             return;
         }
 
@@ -501,14 +457,14 @@ void handle_command(char *cmd_buf, int current_time) {
         char *med_name = strtok_r(NULL, " ", &saveptr);
         if (!med_name) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "RESTOCK: Missing medication name");
-            printf("Format: RESTOCK <medication_name> quantity: <amount>\n");
+            print_restock_format();
             return;
         }
         
         int med_id = get_med_id(med_name);
         if (med_id == -1) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "RESTOCK: Invalid medication name");
-            printf("Format: RESTOCK <medication_name> quantity: <amount>\n");
+            print_restock_format();
             return;
         }
         
@@ -528,7 +484,7 @@ void handle_command(char *cmd_buf, int current_time) {
         
         if (!has_qty || qty <= 0) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "RESTOCK: Invalid/Missing quantity (>0)");
-            printf("Format: RESTOCK <medication_name> quantity: <amount>\n");
+            print_restock_format();
             return;
         }
         
@@ -547,16 +503,21 @@ void handle_command(char *cmd_buf, int current_time) {
         printf("STATUS <component>\n");
         printf("  <component>: ALL | TRIAGE | SURGERY | PHARMACY | LAB\n\n");
         printf("EMERGENCY <patient_id> init: <time> triage: <1-5> stability: <value> [tests: <test1,test2,...>] [meds: <med1,med2,...>]\n");
+        printf("  <patient_id>: PAC followed by digits (e.g., PAC001)\n");
         printf("  Registers a new emergency patient.\n\n");
         printf("APPOINTMENT <patient_id> init: <time> scheduled: <time> doctor: <specialty> [tests: <test1,test2,...>]\n");
+        printf("  <patient_id>: PAC followed by digits (e.g., PAC001)\n");
         printf("  <specialty>: CARDIO | ORTHO | NEURO\n\n");
         printf("SURGERY <patient_id> init: <time> type: <specialty> scheduled: <time> urgency: <level> tests: <test1,test2,...> meds: <med1,med2,...>\n");
+        printf("  <patient_id>: PAC followed by digits (e.g., PAC001)\n");
         printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
         printf("  <level>: LOW | MEDIUM | HIGH\n");
         printf("  Note: PREOP test is required.\n\n");
-        printf("PHARMACY_REQUEST <patient_id> init: <time> priority: <priority> items: <med1:qty1,med2:qty2,...>\n");
+        printf("PHARMACY_REQUEST <request_id> init: <time> priority: <priority> items: <med1:qty1,med2:qty2,...>\n");
+        printf("  <request_id>: REQ followed by digits (e.g., REQ001)\n");
         printf("  <priority>: URGENT | HIGH | NORMAL\n\n");
-        printf("LAB_REQUEST <patient_id> init: <time> priority: <priority> lab: <lab> tests: <test1,test2,...>\n");
+        printf("LAB_REQUEST <lab_id> init: <time> priority: <priority> lab: <lab> tests: <test1,test2,...>\n");
+        printf("  <lab_id>: LAB followed by digits (e.g., LAB001)\n");
         printf("  <priority>: URGENT | NORMAL\n");
         printf("  <lab>: LAB1 | LAB2 | BOTH\n\n");
         printf("RESTOCK <medication_name> quantity: <amount>\n");

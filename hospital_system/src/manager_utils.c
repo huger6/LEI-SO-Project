@@ -67,6 +67,8 @@ void setup_signal_handlers(void) {
     sigaction(SIGUSR1, &sa, NULL);
     sigaction(SIGUSR2, &sa, NULL);
     sigaction(SIGCHLD, &sa, NULL);
+
+    log_event(INFO, "SYSTEM", "SIGNALS", "Signal handlers setup initialized successfully");
 }
 
 // Setup signal handlers for child processes
@@ -88,23 +90,90 @@ void setup_child_signals(void) {
 }
 
 // Returns 1 if valid, 0 if invalid
-int validate_patient_id(const char *id) {
+// Validates ID based on type:
+// - ID_TYPE_PATIENT: PAC{number} (5-15 chars)
+// - ID_TYPE_LAB: LAB{number} (5-15 chars)
+// - ID_TYPE_PHARMACY: REQ{number} (5-15 chars)
+int validate_id(const char *id, id_type_t type) {
     if (!id) return 0;
     
     size_t len = strlen(id);
 
-    // 1. Check strict length constraint from PDF (5-15 chars)
+    // Check strict length constraint (5-15 chars)
     if (len < 5 || len > 15) return 0;
 
-    // 2. Check for "PAC" prefix (Optional, based on your preference)
-    if (strncmp(id, "PAC", 3) != 0) return 0;
+    // Check prefix based on type
+    const char *expected_prefix;
+    switch (type) {
+        case ID_TYPE_PATIENT:
+            expected_prefix = "PAC";
+            break;
+        case ID_TYPE_LAB:
+            expected_prefix = "LAB";
+            break;
+        case ID_TYPE_PHARMACY:
+            expected_prefix = "REQ";
+            break;
+        default:
+            return 0;
+    }
 
-    // 3. Check that the rest are digits
+    if (strncmp(id, expected_prefix, 3) != 0) return 0;
+
+    // Check that the rest are digits
     for (size_t i = 3; i < len; i++) {
         if (!isdigit((unsigned char)id[i])) return 0;
     }
 
     return 1;
+}
+
+// Legacy function for backward compatibility
+int validate_patient_id(const char *id) {
+    return validate_id(id, ID_TYPE_PATIENT);
+}
+
+// ===== Command Format Print Helpers =====
+
+void print_status_format(void) {
+    printf("Format: STATUS <component>\n");
+    printf("  <component>: ALL | TRIAGE | SURGERY | PHARMACY | LAB\n");
+}
+
+void print_emergency_format(void) {
+    printf("Format: EMERGENCY <patient_id> init: <time> triage: <1-5> stability: <value> [tests: <test1,test2,...>] [meds: <med1,med2,...>]\n");
+    printf("  <patient_id>: PAC followed by digits (e.g., PAC001)\n");
+}
+
+void print_appointment_format(void) {
+    printf("Format: APPOINTMENT <patient_id> init: <time> scheduled: <time> doctor: <specialty> [tests: <test1,test2,...>]\n");
+    printf("  <patient_id>: PAC followed by digits (e.g., PAC001)\n");
+    printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
+}
+
+void print_surgery_format(void) {
+    printf("Format: SURGERY <patient_id> init: <time> type: <specialty> scheduled: <time> urgency: <level> tests: <test1,test2,...> meds: <med1,med2,...>\n");
+    printf("  <patient_id>: PAC followed by digits (e.g., PAC001)\n");
+    printf("  <specialty>: CARDIO | ORTHO | NEURO\n");
+    printf("  <level>: LOW | MEDIUM | HIGH\n");
+    printf("  Note: PREOP test is required\n");
+}
+
+void print_pharmacy_format(void) {
+    printf("Format: PHARMACY_REQUEST <request_id> init: <time> priority: <priority> items: <med1:qty1,med2:qty2,...>\n");
+    printf("  <request_id>: REQ followed by digits (e.g., REQ001)\n");
+    printf("  <priority>: URGENT | HIGH | NORMAL\n");
+}
+
+void print_lab_format(void) {
+    printf("Format: LAB_REQUEST <lab_id> init: <time> priority: <priority> lab: <lab> tests: <test1,test2,...>\n");
+    printf("  <lab_id>: LAB followed by digits (e.g., LAB001)\n");
+    printf("  <priority>: URGENT | NORMAL\n");
+    printf("  <lab>: LAB1 | LAB2 | BOTH\n");
+}
+
+void print_restock_format(void) {
+    printf("Format: RESTOCK <medication_name> quantity: <amount>\n");
 }
 
 // Use only on child processes
@@ -173,7 +242,7 @@ void manager_cleanup() {
     close_logging();
 }
 
-void shutdown_triage() {
+void poison_pill_triage() {
     // We only send to one thread
     // The others are taken care of inside the process
     msg_new_emergency_t poison_pill;
@@ -181,6 +250,20 @@ void shutdown_triage() {
     poison_pill.hdr.mtype = MSG_NEW_EMERGENCY;
     poison_pill.hdr.kind = MSG_SHUTDOWN;
     if (send_generic_message(mq_triage_id, &poison_pill, sizeof(msg_new_emergency_t)) == 0) {
+        log_event(INFO, "SHUTDOWN", "BROADCAST", "SHUTDOWN message sent to triage");
+    } else {
+        log_event(ERROR, "SHUTDOWN", "BROADCAST", "Failed to broadcast SHUTDOWN message to triage");
+    }
+}
+
+void poison_pill_surgery() {
+    // We only send to one thread
+    // The others are taken care of inside the process
+    msg_new_surgery_t poison_pill;
+    memset(&poison_pill, 0, sizeof(msg_new_surgery_t));
+    poison_pill.hdr.mtype = MSG_NEW_SURGERY;
+    poison_pill.hdr.kind = MSG_SHUTDOWN;
+    if (send_generic_message(mq_triage_id, &poison_pill, sizeof(msg_new_surgery_t)) == 0) {
         log_event(INFO, "SHUTDOWN", "BROADCAST", "SHUTDOWN message sent to triage");
     } else {
         log_event(ERROR, "SHUTDOWN", "BROADCAST", "Failed to broadcast SHUTDOWN message to triage");

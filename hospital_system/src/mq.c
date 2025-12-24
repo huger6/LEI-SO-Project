@@ -10,6 +10,8 @@
 
 #include "../include/mq.h"
 #include "../include/log.h"
+#include "../include/config.h"
+#include "../include/manager_utils.h"
 
 
 #define MSG_SIZE_CALC(size) (size - sizeof(long))
@@ -192,3 +194,33 @@ int receive_specific_message(int mq_id, void *msg_buffer, size_t total_struct_si
     }
     return 0;
 }
+
+/**
+ * Receives any message with mtype <= max_type from a Message Queue.
+ * Useful for receiving messages in an operation_id range.
+ * @param mq_id Queue ID.
+ * @param msg_buffer Pointer to the buffer where the message will be stored.
+ * @param total_struct_size sizeof(MESSAGE_TYPE).
+ * @param max_type The maximum mtype to accept. Receives first message with mtype <= max_type.
+ * @return 0 on success, -1 on failure.
+ */
+int receive_message_up_to_type(int mq_id, void *msg_buffer, size_t total_struct_size, long max_type) {
+    size_t payload_size = MSG_SIZE_CALC(total_struct_size);
+    
+    // msgrcv with negative msgtyp: Reads first message with mtype <= |msgtyp|
+    // This allows receiving any message in a range (e.g., operation_ids 1000-1002)
+    ssize_t result = msgrcv(mq_id, msg_buffer, payload_size, -max_type, 0);
+
+    if (result == -1) {
+        // EINTR: signal interruption
+        if (errno != EINTR) {
+            char desc[128];
+            snprintf(desc, sizeof(desc), "Failed to receive message (up to type %ld) from MQ %d: %s", 
+                     max_type, mq_id, strerror(errno));
+            log_event(ERROR, "IPC", "MSG_RCV_RANGE_FAIL", desc);
+        }
+        return -1;
+    }
+    return 0;
+}
+

@@ -1,4 +1,5 @@
 #define _DEFAULT_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,7 @@
 #include "../include/safe_threads.h"
 #include "../include/time_simulation.h"
 #include "../include/manager_utils.h"
+#include "../include/pipes.h"
 
 // --- Constants ---
 #define ROOM_FREE       0
@@ -196,11 +198,12 @@ static int send_lab_request_async(active_surgery_t *surgery) {
     msg_lab_request_t req;
     memset(&req, 0, sizeof(msg_lab_request_t));
     
-    req.hdr.mtype = MSG_LAB_REQUEST;
+    req.hdr.mtype = PRIORITY_NORMAL;
     req.hdr.kind = MSG_LAB_REQUEST;
     strncpy(req.hdr.patient_id, surgery->patient_id, sizeof(req.hdr.patient_id) - 1);
     req.hdr.operation_id = surgery->surgery_id;
     req.hdr.timestamp = time(NULL);
+    req.sender = SENT_BY_SURGERY;
     
     // Clamp tests_count to message struct limit to prevent overflow
     int tests_to_copy = surgery->tests_count;
@@ -256,6 +259,7 @@ static int send_pharmacy_request_async(active_surgery_t *surgery) {
     strncpy(req.hdr.patient_id, surgery->patient_id, sizeof(req.hdr.patient_id) - 1);
     req.hdr.operation_id = surgery->surgery_id;
     req.hdr.timestamp = time(NULL);
+    req.sender = SENT_BY_SURGERY;
     
     // Safe copy: clamp to both source and destination limits
     int meds_to_copy = surgery->meds_count;
@@ -334,7 +338,6 @@ static int wait_for_dependencies(active_surgery_t *surgery) {
             int meds_ok_flag = !surgery->needs_meds || surgery->meds_ok;
             
             if (tests_ok && meds_ok_flag) {
-                // Race condition: response arrived just as we timed out
                 safe_pthread_mutex_unlock(&surgery->mutex);
                 log_event(INFO, "SURGERY", "DEPS_READY", surgery->patient_id);
                 return 0;
@@ -848,7 +851,12 @@ static void dispatcher_loop(void) {
 // --- Main Surgery Process ---
 
 void surgery_main(void) {
-    log_event(INFO, "SURGERY", "STARTUP", "Surgery process started");
+    log_event(INFO, "SURGERY", "STARTUP", "surgery process initialized");
+
+    setup_child_signals();
+
+    close_unused_pipe_ends(ROLE_SURGERY);
+    
     
     // Seed random number generator
     srand(time(NULL) ^ getpid());
@@ -873,8 +881,14 @@ void surgery_main(void) {
     }
     safe_pthread_mutex_unlock(&registry_mutex);
     
-    // Cleanup global resources
+    // Process resources cleanup
     safe_pthread_cond_destroy(&teams_available_cond);
     
-    log_event(INFO, "SURGERY", "SHUTDOWN", "Surgery process finished");
+    log_event(INFO, "SURGERY", "SHUTDOWN", "Surgery process shutting down");
+
+    // Resources cleanup
+    log_event(INFO, "SURGERY", "RESOURCES_CLEANUP", "Cleaning surgery resources");
+    child_cleanup();
+
+    exit(EXIT_SUCCESS);
 }

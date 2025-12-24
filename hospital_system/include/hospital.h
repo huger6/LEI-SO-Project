@@ -40,7 +40,7 @@ typedef struct {
 
 //  SHM4: Lab Queues
 typedef struct {
-    char request_id[20];
+    char request_id[15];
     char patient_id[15];
     int test_type;
     int priority;

@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <sys/wait.h>
 #include <sys/select.h>
+#include <sys/msg.h>
 #include <time.h>
 
 #include "../include/mq.h"
@@ -29,8 +30,8 @@
 
 // --- FILE PATHS ---
 
-#define CONFIG_PATH     "config/config.txt"         // config.txt 
-#define LOGS_PATH       "logs/hospital_log.txt"     // hospital_logs.txt
+#define CONFIG_PATH     "config/config.cfg"         // config.txt 
+#define LOGS_PATH       "logs/hospital_log.log"     // hospital_logs.txt
 
 // --- Function Headers ---
 extern void triage_main(void);
@@ -46,6 +47,88 @@ pid_t pid_console_input;
 // FLags
 volatile sig_atomic_t g_shutdown = 0;
 
+// Notification Monitor Thread
+pthread_t t_notification_monitor;
+
+// Manager operation_id base (used when Manager sends requests)
+// Triage uses 1000-1002, Surgery uses surgery_id, Manager uses 2000+
+#define MANAGER_OPERATION_ID_BASE 2000
+
+// --- Notification Monitor Thread ---
+// Listens for feedback messages from child processes on mq_responses_id
+// Only receives messages with mtype >= MANAGER_OPERATION_ID_BASE (Manager's own requests)
+// Triage messages (mtype 1000-1002) are received by Triage's dispatcher
+
+void *notification_monitor(void *arg) {
+    (void)arg;
+    
+    // Buffer large enough for any response message
+    // Using msg_header_t as base, but could receive larger messages
+    union {
+        msg_header_t hdr;
+        char buffer[512]; // fits any data
+    } msg;
+    
+    log_event(INFO, "MANAGER", "MONITOR_START", "Notification monitor thread started");
+    
+    while (!check_shutdown()) {
+        // Block waiting for messages with mtype = MANAGER_OPERATION_ID_BASE
+        // Manager always uses this fixed operation_id for all its requests
+        // This avoids consuming Triage messages (mtype 1000-1002)
+        
+        memset(&msg, 0, sizeof(msg));
+        int result = receive_specific_message(mq_responses_id, &msg, sizeof(msg), 
+                                              MANAGER_OPERATION_ID_BASE);
+        
+        if (result == -1) {
+            // Error or signal interruption, check shutdown and retry
+            if (check_shutdown()) break;
+            continue;
+        }
+        
+        // Check for shutdown message
+        if (msg.hdr.kind == MSG_SHUTDOWN) {
+            log_event(INFO, "MANAGER", "MONITOR_SHUTDOWN", "Received shutdown notification");
+            break;
+        }
+        
+        // Log the received feedback
+        char log_msg[128];
+        switch (msg.hdr.kind) {
+            case MSG_PHARM_READY:
+                snprintf(log_msg, sizeof(log_msg), 
+                         "Pharmacy ready notification for patient %s (op_id: %d)",
+                         msg.hdr.patient_id, msg.hdr.operation_id);
+                log_event(INFO, "MANAGER", "PHARM_FEEDBACK", log_msg);
+                break;
+                
+            case MSG_LAB_RESULTS_READY:
+                snprintf(log_msg, sizeof(log_msg), 
+                         "Lab results ready for patient %s (op_id: %d)",
+                         msg.hdr.patient_id, msg.hdr.operation_id);
+                log_event(INFO, "MANAGER", "LAB_FEEDBACK", log_msg);
+                break;
+                
+            case MSG_CRITICAL_STATUS:
+                snprintf(log_msg, sizeof(log_msg), 
+                         "Critical status update for patient %s",
+                         msg.hdr.patient_id);
+                log_event(WARNING, "MANAGER", "CRITICAL_FEEDBACK", log_msg);
+                break;
+                
+            default:
+                snprintf(log_msg, sizeof(log_msg), 
+                         "Received feedback (kind: %d) for patient %s (op_id: %d)",
+                         msg.hdr.kind, msg.hdr.patient_id, msg.hdr.operation_id);
+                log_event(INFO, "MANAGER", "CHILD_FEEDBACK", log_msg);
+                break;
+        }
+    }
+    
+    log_event(INFO, "MANAGER", "MONITOR_STOP", "Notification monitor thread stopped");
+    return NULL;
+}
+
 // --- Main ---
 
 int main(void) {
@@ -55,20 +138,20 @@ int main(void) {
     }
 
     // --- Initialize logging system ---
-    init_logging(LOGS_PATH);
-    log_event(INFO, "SYSTEM", "STARTUP", "Hospital system starting");
+    if (init_logging(LOGS_PATH) == 0) {
+        log_event(INFO, "SYSTEM", "STARTUP", "Hospital system starting");
+    } else {
+        cleanup_config();
+        exit(EXIT_FAILURE);
+    }
 
     // --- Load config.txt ---
     if (load_config(CONFIG_PATH) != 0) {
         log_event(ERROR, "CONFIG", "LOAD_FAILED", "Invalid config.txt file");
+        cleanup_config();
         exit(EXIT_FAILURE);
     }
     log_event(INFO, "CONFIG", "LOADED", "Configuration loaded sucessfully");
-
-    // Console Output for Debugging
-    #ifdef DEBUG
-        print_configs();
-    #endif
 
     // --- @IPC ---
 
@@ -77,6 +160,7 @@ int main(void) {
     // --- Message Queues ---
     if (create_all_message_queues() == -1) {
         (void)remove_all_message_queues();
+        cleanup_config();
         exit(EXIT_FAILURE);
     }
 
@@ -84,6 +168,7 @@ int main(void) {
     if (init_all_shm() != 0) {
         cleanup_all_shm();
         (void)remove_all_message_queues();
+        cleanup_config();
         exit(EXIT_FAILURE);
     }
     init_all_shm_data(config); 
@@ -96,7 +181,8 @@ int main(void) {
         log_event(ERROR, "IPC", "PIPE_INIT_FAIL", "Failed to initialize pipes");
         // Cleanup and exit
         cleanup_all_shm();
-        remove_all_message_queues();
+        (void)remove_all_message_queues();
+        cleanup_config();
         exit(EXIT_FAILURE);
     }
 
@@ -106,16 +192,14 @@ int main(void) {
         cleanup_all_shm();
         remove_all_message_queues();
         destroy_all_pipes();
+        cleanup_config();
         exit(EXIT_FAILURE);
     }
 
     log_event(INFO, "SYSTEM", "IPC_INIT", "All IPC mechanisms initialized successfully");
 
     // --- Signal handlers ---
-    // Setup after pipes are initialized so notify_manager_from_signal() works
     setup_signal_handlers();
-
-    log_event(INFO, "SYSTEM", "SIGNALS", "Signal handlers setup initialized successfully");
 
     // --- Forks ---
 
@@ -124,20 +208,7 @@ int main(void) {
     // Input
     pid_console_input = fork();
     if (pid_console_input == 0) {
-        // Child: Console Input
-
-        // Close all read ends
-        for(int i = 0; i < 6; i++) close(get_pipe_read_end(i));
-        // Close all write ends except INPUT
-        for(int i = 0; i < 6; i++) {
-            if (i != PIPE_INPUT) close(get_pipe_write_end(i));
-        }
-
         process_console_input();
-
-        log_event(INFO, "CONSOLE_INPUT", "RESOURCES_CLEANUP", "Cleaning console input receiver resources");
-        child_cleanup();
-        exit(EXIT_SUCCESS);
     } 
     else if (pid_console_input < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork console input process");
@@ -152,13 +223,7 @@ int main(void) {
     // Triage
     pid_triage = fork();
     if (pid_triage == 0) {
-        setup_child_signals();
-        close_unused_pipe_ends(ROLE_TRIAGE);
         triage_main();
-
-        log_event(INFO, "TRIAGE", "RESOURCES_CLEANUP", "Cleaning triage resources");
-        child_cleanup();
-        exit(EXIT_SUCCESS);
     } 
     else if (pid_triage < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork triage process");
@@ -173,13 +238,7 @@ int main(void) {
     // Surgery
     pid_surgery = fork();
     if (pid_surgery == 0) {
-        setup_child_signals();
-        close_unused_pipe_ends(ROLE_SURGERY);
         surgery_main();
-
-        log_event(INFO, "SURGERY", "RESOURCES_CLEANUP", "Cleaning surgery resources");
-        child_cleanup();
-        exit(EXIT_SUCCESS);
     }
     else if (pid_surgery < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork surgery process");
@@ -194,13 +253,7 @@ int main(void) {
     // Pharmacy
     pid_pharmacy = fork();
     if (pid_pharmacy == 0) {
-        setup_child_signals();
-        close_unused_pipe_ends(ROLE_PHARMACY);
         pharmacy_main();
-
-        log_event(INFO, "PHARMACY", "RESOURCES_CLEANUP", "Cleaning pharmacy resources");
-        child_cleanup();
-        exit(EXIT_SUCCESS);
     } 
     else if (pid_pharmacy < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork pharmacy process");
@@ -215,13 +268,7 @@ int main(void) {
     // Lab
     pid_lab = fork();
     if (pid_lab == 0) {
-        setup_child_signals();
-        close_unused_pipe_ends(ROLE_LAB);
         lab_main();
-
-        log_event(INFO, "LAB", "RESOURCES_CLEANUP", "Cleaning laboratory resources");
-        child_cleanup();
-        exit(EXIT_SUCCESS);
     }
     else if (pid_lab < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to fork laboratory process");
@@ -238,6 +285,13 @@ int main(void) {
     // --- Manager Process Setup ---
 
     close_unused_pipe_ends(ROLE_MANAGER);
+
+    // --- Start Notification Monitor Thread ---
+    if (safe_pthread_create(&t_notification_monitor, NULL, notification_monitor, NULL) != 0) {
+        log_event(ERROR, "MANAGER", "THREAD_FAIL", "Failed to create notification monitor thread");
+    } else {
+        log_event(INFO, "MANAGER", "THREAD_START", "Notification monitor thread created");
+    }
 
     // --- Main loop ---
     
@@ -331,7 +385,8 @@ int main(void) {
                             set_shutdown();
 
                             // --- Broadcast SHUTDOWN message ---
-                            shutdown_triage();
+                            poison_pill_triage();
+                            poison_pill_surgery();
                         }
                         break;
 
@@ -398,6 +453,21 @@ int main(void) {
     }
 
     // --- Shutdown sequence ---
+    
+    // Poison pill for notification_monitor thread
+    msg_header_t shutdown_msg;
+    memset(&shutdown_msg, 0, sizeof(shutdown_msg));
+    shutdown_msg.mtype = MANAGER_OPERATION_ID_BASE;  // Must match what notification_monitor expects
+    shutdown_msg.kind = MSG_SHUTDOWN;
+    shutdown_msg.timestamp = time(NULL);
+    strcpy(shutdown_msg.patient_id, "SYSTEM");
+    send_generic_message(mq_responses_id, &shutdown_msg, sizeof(msg_header_t));
+    
+    // Wait for the notification monitor thread to finish
+    log_event(INFO, "MANAGER", "THREAD_JOIN", "Waiting for notification monitor thread to finish");
+    safe_pthread_join(t_notification_monitor, NULL);
+    log_event(INFO, "MANAGER", "THREAD_DONE", "Notification monitor thread joined");
+    
     manager_cleanup();
 
     return 0;

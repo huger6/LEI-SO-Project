@@ -50,12 +50,18 @@ typedef enum {
     MSG_SHUTDOWN
 } message_kind_t;
 
+typedef enum {
+    SENT_BY_MANAGER = 1,
+    SENT_BY_TRIAGE,
+    SENT_BY_SURGERY,
+} msg_sender_t;
+
 // Message header (for all)
 typedef struct {
     long mtype;
     message_kind_t kind;
     char patient_id[20];
-    int operation_id; // surgery id (0 if n/a)
+    int operation_id;
     time_t timestamp;
 } msg_header_t;
 
@@ -93,6 +99,7 @@ typedef struct {
 
 typedef struct {
     msg_header_t hdr;
+    msg_sender_t sender;
     int meds_count;
     int meds_id[8];
     int meds_qty[8];
@@ -105,6 +112,7 @@ typedef struct {
 
 typedef struct {
     msg_header_t hdr;
+    msg_sender_t sender;
     int tests_count;
     int tests_id[5];
 } msg_lab_request_t;
@@ -140,6 +148,7 @@ int remove_all_message_queues();
 int send_generic_message(int mq_id, const void *msg_ptr, size_t total_struct_size);
 int receive_generic_message(int mq_id, void *msg_buffer, size_t total_struct_size, long max_priority_type);
 int receive_specific_message(int mq_id, void *msg_buffer, size_t total_struct_size, long message_type);
+int receive_message_up_to_type(int mq_id, void *msg_buffer, size_t total_struct_size, long max_type);
 
 
 #endif

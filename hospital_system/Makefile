@@ -32,7 +32,7 @@ $(OBJ_DIR):
 clean:
 	rm -rf $(OBJ_DIR) $(EXEC)
 	[ -d results ] && find results -type f -delete || true
-	rm -f logs/hospital_log.txt
+	rm -f logs/hospital_log.log
 
 ipc_clean:
 	@echo "Removing IPC resources for user $$(whoami)"
