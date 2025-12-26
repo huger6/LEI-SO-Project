@@ -43,6 +43,14 @@ extern void lab_main(void);
 // Child PIDs
 pid_t pid_triage, pid_surgery, pid_pharmacy, pid_lab;
 
+static const char *role_for_pid(pid_t pid) {
+    if (pid == pid_triage) return "TRIAGE";
+    if (pid == pid_surgery) return "SURGERY";
+    if (pid == pid_pharmacy) return "PHARMACY";
+    if (pid == pid_lab) return "LAB";
+    return "UNKNOWN";
+}
+
 // Flags
 volatile sig_atomic_t g_shutdown = 0;
 
@@ -186,41 +194,105 @@ int main(void) {
     // Triage
     pid_triage = fork();
     if (pid_triage == 0) {
+        #ifdef DEBUG
+            char dbg[128];
+            snprintf(dbg, sizeof(dbg), "Child starting: role=TRIAGE pid=%d ppid=%d", (int)getpid(), (int)getppid());
+            log_event(DEBUG_LOG, "TRIAGE", "PROCESS_START", dbg);
+        #endif
         triage_main();
     } 
     else if (pid_triage < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to start triage process");
+        #ifdef DEBUG
+            char dbg[128];
+            snprintf(dbg, sizeof(dbg), "fork(TRIAGE) failed: errno=%d (%s)", errno, strerror(errno));
+            log_event(DEBUG_LOG, "SYSTEM", "FORK_FAIL_DEBUG", dbg);
+        #endif
         set_shutdown();
+    } else {
+        #ifdef DEBUG
+            char dbg[128];
+            snprintf(dbg, sizeof(dbg), "Forked TRIAGE: parent=%d child=%d", (int)getpid(), (int)pid_triage);
+            log_event(DEBUG_LOG, "SYSTEM", "FORK", dbg);
+        #endif
     }
 
     // Surgery
     pid_surgery = fork();
     if (pid_surgery == 0) {
+        #ifdef DEBUG
+            char dbg[128];
+            snprintf(dbg, sizeof(dbg), "Child starting: role=SURGERY pid=%d ppid=%d", (int)getpid(), (int)getppid());
+            log_event(DEBUG_LOG, "SURGERY", "PROCESS_START", dbg);
+        #endif
         surgery_main();
     }
     else if (pid_surgery < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to start surgery process");
+        #ifdef DEBUG
+            char dbg[128];
+            snprintf(dbg, sizeof(dbg), "fork(SURGERY) failed: errno=%d (%s)", errno, strerror(errno));
+            log_event(DEBUG_LOG, "SYSTEM", "FORK_FAIL_DEBUG", dbg);
+        #endif
         set_shutdown();
+    } else {
+        #ifdef DEBUG
+            char dbg[128];
+            snprintf(dbg, sizeof(dbg), "Forked SURGERY: parent=%d child=%d", (int)getpid(), (int)pid_surgery);
+            log_event(DEBUG_LOG, "SYSTEM", "FORK", dbg);
+        #endif
     }
 
     // Pharmacy
     pid_pharmacy = fork();
     if (pid_pharmacy == 0) {
+        #ifdef DEBUG
+            char dbg[128];
+            snprintf(dbg, sizeof(dbg), "Child starting: role=PHARMACY pid=%d ppid=%d", (int)getpid(), (int)getppid());
+            log_event(DEBUG_LOG, "PHARMACY", "PROCESS_START", dbg);
+        #endif
         pharmacy_main();
     } 
     else if (pid_pharmacy < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to start pharmacy process");
+        #ifdef DEBUG
+            char dbg[128];
+            snprintf(dbg, sizeof(dbg), "fork(PHARMACY) failed: errno=%d (%s)", errno, strerror(errno));
+            log_event(DEBUG_LOG, "SYSTEM", "FORK_FAIL_DEBUG", dbg);
+        #endif
         set_shutdown();
+    } else {
+        #ifdef DEBUG
+            char dbg[128];
+            snprintf(dbg, sizeof(dbg), "Forked PHARMACY: parent=%d child=%d", (int)getpid(), (int)pid_pharmacy);
+            log_event(DEBUG_LOG, "SYSTEM", "FORK", dbg);
+        #endif
     }
 
     // Lab
     pid_lab = fork();
     if (pid_lab == 0) {
+        #ifdef DEBUG
+            char dbg[128];
+            snprintf(dbg, sizeof(dbg), "Child starting: role=LAB pid=%d ppid=%d", (int)getpid(), (int)getppid());
+            log_event(DEBUG_LOG, "LAB", "PROCESS_START", dbg);
+        #endif
         lab_main();
     }
     else if (pid_lab < 0) {
         log_event(ERROR, "SYSTEM", "FORK_FAIL", "Failed to start laboratory process");
+        #ifdef DEBUG
+            char dbg[128];
+            snprintf(dbg, sizeof(dbg), "fork(LAB) failed: errno=%d (%s)", errno, strerror(errno));
+            log_event(DEBUG_LOG, "SYSTEM", "FORK_FAIL_DEBUG", dbg);
+        #endif
         set_shutdown();
+    } else {
+        #ifdef DEBUG
+            char dbg[128];
+            snprintf(dbg, sizeof(dbg), "Forked LAB: parent=%d child=%d", (int)getpid(), (int)pid_lab);
+            log_event(DEBUG_LOG, "SYSTEM", "FORK", dbg);
+        #endif
     }
 
     if (!check_shutdown()) log_event(INFO, "SYSTEM", "RUNNING", "All modules started successfully");
@@ -251,28 +323,42 @@ int main(void) {
     size_t stdin_pos = 0;
 
     while (!check_shutdown()) {
-        // 1. Calculate Timeout
+        // 1. Calculate Timeout (NEVER block indefinitely - always wake for heartbeat)
         struct timeval timeout;
-        struct timeval *timeout_ptr = NULL;
 
+        // Calculate time until next tick (heartbeat) - ensures clock always advances
+        long ms_until_tick = config->time_unit_ms - accumulated_ms;
+        if (ms_until_tick <= 0) ms_until_tick = 1; // At least 1ms to avoid busy-loop
+
+        // Start with heartbeat as the default timeout
+        long timeout_ms = ms_until_tick;
+
+        // If there are scheduled events, wake up earlier if needed
         if (has_scheduled_events()) {
             int next_event_time = get_next_scheduled_time();
-            long ms_until_next = 0;
             
-            if (next_event_time > current_logical_time) {
-                int ticks_needed = next_event_time - current_logical_time;
-                ms_until_next = (long)ticks_needed * config->time_unit_ms - accumulated_ms;
-                if (ms_until_next < 0) ms_until_next = 0;
+            if (next_event_time <= current_logical_time) {
+                // Event is already due - wake immediately
+                timeout_ms = 0;
             } else {
-                ms_until_next = 0;
-            }
+                // Calculate ms until the event is due
+                int ticks_needed = next_event_time - current_logical_time;
+                long ms_until_event = (long)ticks_needed * config->time_unit_ms - accumulated_ms;
+                if (ms_until_event < 0) ms_until_event = 0;
 
-            timeout.tv_sec = ms_until_next / 1000;
-            timeout.tv_usec = (ms_until_next % 1000) * 1000;
-            timeout_ptr = &timeout;
-        } else {
-            timeout_ptr = NULL; // Block indefinitely
+                // Use the smaller of event time and heartbeat time
+                if (ms_until_event < timeout_ms) {
+                    timeout_ms = ms_until_event;
+                }
+            }
         }
+
+        // Safety: ensure non-negative timeout
+        if (timeout_ms < 0) timeout_ms = 0;
+
+        // Convert to timeval with valid microseconds (0-999999)
+        timeout.tv_sec = timeout_ms / 1000;
+        timeout.tv_usec = (timeout_ms % 1000) * 1000;
 
         FD_ZERO(&readfds);
         FD_SET(fd_stdin, &readfds);  // Always listen to stdin
@@ -283,8 +369,8 @@ int main(void) {
         if (fd_stdin > max_fd) max_fd = fd_stdin;
         if (fd_input != -1 && fd_input > max_fd) max_fd = fd_input;
 
-        // 2. Select
-        int ret = select(max_fd + 1, &readfds, NULL, NULL, timeout_ptr);
+        // 2. Select (always with timeout - never NULL to ensure heartbeat)
+        int ret = select(max_fd + 1, &readfds, NULL, NULL, &timeout);
 
         // 3. Update Clock
         clock_gettime(CLOCK_MONOTONIC, &now);
@@ -348,6 +434,7 @@ int main(void) {
                         int status;
                         pid_t pid;
                         while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+                            const char *role = role_for_pid(pid);
                             // Mark pid as waited
                             if (pid == pid_triage) {
                                 pid_triage = -1;
@@ -362,16 +449,28 @@ int main(void) {
                             char details[100];
                             if (WIFEXITED(status)) {
                                 snprintf(details, sizeof(details),
-                                        "Child %d exited (code %d)",
-                                        pid, WEXITSTATUS(status));
+                                        "Child %d (%s) exited (code %d)",
+                                        pid, role, WEXITSTATUS(status));
                                 log_event(INFO, "SYSTEM", "CHILD_EXIT", details);
                             } 
                             else if (WIFSIGNALED(status)) {
                                 snprintf(details, sizeof(details),
-                                        "Child %d killed (sig %d)",
-                                        pid, WTERMSIG(status));
+                                        "Child %d (%s) killed (sig %d)",
+                                        pid, role, WTERMSIG(status));
                                 log_event(ERROR, "SYSTEM", "CHILD_KILLED", details);
                             }
+
+                            #ifdef DEBUG
+                                char dbg[160];
+                                if (WIFEXITED(status)) {
+                                    snprintf(dbg, sizeof(dbg), "SIGCHLD: role=%s pid=%d exited status=%d", role, (int)pid, WEXITSTATUS(status));
+                                } else if (WIFSIGNALED(status)) {
+                                    snprintf(dbg, sizeof(dbg), "SIGCHLD: role=%s pid=%d signaled sig=%d", role, (int)pid, WTERMSIG(status));
+                                } else {
+                                    snprintf(dbg, sizeof(dbg), "SIGCHLD: role=%s pid=%d status=0x%x", role, (int)pid, status);
+                                }
+                                log_event(DEBUG_LOG, "SYSTEM", "SIGCHLD", dbg);
+                            #endif
                         }
                         break;
                 }
@@ -427,6 +526,12 @@ int main(void) {
     shutdown_msg.timestamp = time(NULL);
     strcpy(shutdown_msg.patient_id, "SYSTEM");
     send_generic_message(mq_responses_id, &shutdown_msg, sizeof(msg_header_t));
+
+    #ifdef DEBUG
+        char dbg[128];
+        snprintf(dbg, sizeof(dbg), "Sent manager thread shutdown message (mq_responses_id=%d)", mq_responses_id);
+        log_event(DEBUG_LOG, "MANAGER", "THREAD_SHUTDOWN", dbg);
+    #endif
     
     // Wait for the notification monitor thread to finish
     safe_pthread_join(t_notification_monitor, NULL);

@@ -34,6 +34,11 @@ int init_pipes(void) {
         return -1;
     }
 
+    #ifdef DEBUG
+        snprintf(log_msg, sizeof(log_msg), "Created signal self-pipe: read_fd=%d write_fd=%d", signal_pipe[0], signal_pipe[1]);
+        log_event(DEBUG_LOG, "IPC", "PIPE_CREATE", log_msg);
+    #endif
+
     // Set signal pipe to non-blocking for the write end (signal handler safety)
     int flags = fcntl(signal_pipe[1], F_GETFL, 0);
     if (flags != -1) {
@@ -57,6 +62,11 @@ int init_pipes(void) {
     }
     input_pipe_created = 1;
 
+    #ifdef DEBUG
+        snprintf(log_msg, sizeof(log_msg), "Created input FIFO: path=%s", INPUT_PIPE_PATH);
+        log_event(DEBUG_LOG, "IPC", "FIFO_CREATE", log_msg);
+    #endif
+
     // Open the FIFO for reading (non-blocking initially to avoid blocking on open)
     // We use O_RDWR to prevent EOF when no writers are connected
     input_pipe_fd = open(INPUT_PIPE_PATH, O_RDWR | O_NONBLOCK);
@@ -73,6 +83,11 @@ int init_pipes(void) {
         return -1;
     }
 
+    #ifdef DEBUG
+        snprintf(log_msg, sizeof(log_msg), "Opened input FIFO: path=%s fd=%d", INPUT_PIPE_PATH, input_pipe_fd);
+        log_event(DEBUG_LOG, "IPC", "FIFO_OPEN", log_msg);
+    #endif
+
     return 0;
 }
 
@@ -81,6 +96,12 @@ int init_pipes(void) {
 
 int cleanup_pipes(void) {
     int status = 0;
+
+    #ifdef DEBUG
+        char dbg[220];
+        snprintf(dbg, sizeof(dbg), "cleanup_pipes() starting: signal_r=%d signal_w=%d fifo_fd=%d fifo_created=%d", signal_pipe[0], signal_pipe[1], input_pipe_fd, input_pipe_created);
+        log_event(DEBUG_LOG, "IPC", "PIPE_CLEANUP", dbg);
+    #endif
 
     // Close signal pipe
     if (signal_pipe[0] != -1) {
@@ -103,6 +124,12 @@ int cleanup_pipes(void) {
         if (unlink(INPUT_PIPE_PATH) == -1 && errno != ENOENT) status = -1;
         input_pipe_created = 0;
     }
+
+    #ifdef DEBUG
+        char dbg_end[80];
+        snprintf(dbg_end, sizeof(dbg_end), "cleanup_pipes() done -> %d", status);
+        log_event(DEBUG_LOG, "IPC", "PIPE_CLEANUP_DONE", dbg_end);
+    #endif
 
     return status;
 }

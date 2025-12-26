@@ -426,7 +426,7 @@ def main():
     
     # Filename with timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"test_cases/commands_{timestamp}.txt"
+    filename = f"sample_cmds/commands_{timestamp}.txt"
     
     commands = []
     current_time = 0

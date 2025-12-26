@@ -50,6 +50,12 @@ static int create_single_mq(int key_char, const char *name) {
             mq_id = msgget(key, 0666);
             if (mq_id == -1) {
                 log_event(ERROR, "IPC", "MQ_FAIL", name);
+            } else {
+                #ifdef DEBUG
+                    char dbg[140];
+                    snprintf(dbg, sizeof(dbg), "Reused existing MQ: %s id=%d key_char=%c", name, mq_id, (char)key_char);
+                    log_event(DEBUG_LOG, "IPC", "MQ_OPEN", dbg);
+                #endif
             }
         } 
         else {
@@ -57,6 +63,13 @@ static int create_single_mq(int key_char, const char *name) {
             snprintf(desc, sizeof(desc), "Failed to create %s: %s", name, strerror(errno));
             log_event(ERROR, "IPC", "MQ_FAIL", desc);
         }
+    }
+    else {
+        #ifdef DEBUG
+            char dbg[140];
+            snprintf(dbg, sizeof(dbg), "Created MQ: %s id=%d key_char=%c", name, mq_id, (char)key_char);
+            log_event(DEBUG_LOG, "IPC", "MQ_CREATE", dbg);
+        #endif
     }
     return mq_id;
 }
@@ -88,11 +101,90 @@ int create_all_message_queues() {
 int remove_all_message_queues() {
     int result = 0;
 
-    if (mq_triage_id != -1 && msgctl(mq_triage_id, IPC_RMID, NULL) == -1) result = -1;
-    if (mq_surgery_id != -1 && msgctl(mq_surgery_id, IPC_RMID, NULL) == -1) result = -1;
-    if (mq_pharmacy_id != -1 && msgctl(mq_pharmacy_id, IPC_RMID, NULL) == -1) result = -1;
-    if (mq_lab_id != -1 && msgctl(mq_lab_id, IPC_RMID, NULL) == -1) result = -1;
-    if (mq_responses_id != -1 && msgctl(mq_responses_id, IPC_RMID, NULL) == -1) result = -1;
+    if (mq_triage_id != -1) {
+        if (msgctl(mq_triage_id, IPC_RMID, NULL) == -1) {
+            result = -1;
+            #ifdef DEBUG
+                char dbg[160];
+                snprintf(dbg, sizeof(dbg), "Failed to remove MQ_TRIAGE id=%d errno=%d (%s)", mq_triage_id, errno, strerror(errno));
+                log_event(DEBUG_LOG, "IPC", "MQ_RMID_FAIL", dbg);
+            #endif
+        } else {
+            #ifdef DEBUG
+                char dbg[96];
+                snprintf(dbg, sizeof(dbg), "Removed MQ_TRIAGE id=%d", mq_triage_id);
+                log_event(DEBUG_LOG, "IPC", "MQ_RMID", dbg);
+            #endif
+        }
+    }
+
+    if (mq_surgery_id != -1) {
+        if (msgctl(mq_surgery_id, IPC_RMID, NULL) == -1) {
+            result = -1;
+            #ifdef DEBUG
+                char dbg[160];
+                snprintf(dbg, sizeof(dbg), "Failed to remove MQ_SURGERY id=%d errno=%d (%s)", mq_surgery_id, errno, strerror(errno));
+                log_event(DEBUG_LOG, "IPC", "MQ_RMID_FAIL", dbg);
+            #endif
+        } else {
+            #ifdef DEBUG
+                char dbg[96];
+                snprintf(dbg, sizeof(dbg), "Removed MQ_SURGERY id=%d", mq_surgery_id);
+                log_event(DEBUG_LOG, "IPC", "MQ_RMID", dbg);
+            #endif
+        }
+    }
+
+    if (mq_pharmacy_id != -1) {
+        if (msgctl(mq_pharmacy_id, IPC_RMID, NULL) == -1) {
+            result = -1;
+            #ifdef DEBUG
+                char dbg[160];
+                snprintf(dbg, sizeof(dbg), "Failed to remove MQ_PHARMACY id=%d errno=%d (%s)", mq_pharmacy_id, errno, strerror(errno));
+                log_event(DEBUG_LOG, "IPC", "MQ_RMID_FAIL", dbg);
+            #endif
+        } else {
+            #ifdef DEBUG
+                char dbg[96];
+                snprintf(dbg, sizeof(dbg), "Removed MQ_PHARMACY id=%d", mq_pharmacy_id);
+                log_event(DEBUG_LOG, "IPC", "MQ_RMID", dbg);
+            #endif
+        }
+    }
+
+    if (mq_lab_id != -1) {
+        if (msgctl(mq_lab_id, IPC_RMID, NULL) == -1) {
+            result = -1;
+            #ifdef DEBUG
+                char dbg[160];
+                snprintf(dbg, sizeof(dbg), "Failed to remove MQ_LAB id=%d errno=%d (%s)", mq_lab_id, errno, strerror(errno));
+                log_event(DEBUG_LOG, "IPC", "MQ_RMID_FAIL", dbg);
+            #endif
+        } else {
+            #ifdef DEBUG
+                char dbg[96];
+                snprintf(dbg, sizeof(dbg), "Removed MQ_LAB id=%d", mq_lab_id);
+                log_event(DEBUG_LOG, "IPC", "MQ_RMID", dbg);
+            #endif
+        }
+    }
+
+    if (mq_responses_id != -1) {
+        if (msgctl(mq_responses_id, IPC_RMID, NULL) == -1) {
+            result = -1;
+            #ifdef DEBUG
+                char dbg[160];
+                snprintf(dbg, sizeof(dbg), "Failed to remove MQ_RESPONSES id=%d errno=%d (%s)", mq_responses_id, errno, strerror(errno));
+                log_event(DEBUG_LOG, "IPC", "MQ_RMID_FAIL", dbg);
+            #endif
+        } else {
+            #ifdef DEBUG
+                char dbg[110];
+                snprintf(dbg, sizeof(dbg), "Removed MQ_RESPONSES id=%d", mq_responses_id);
+                log_event(DEBUG_LOG, "IPC", "MQ_RMID", dbg);
+            #endif
+        }
+    }
 
     return result;
 }

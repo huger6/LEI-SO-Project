@@ -53,21 +53,57 @@ static sem_t* _init_single_sem(const char *name, int value) {
 }
 
 int init_all_semaphores(void) {
+
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "IPC", "SEM_INIT", "Initializing named semaphores");
+    #endif
     
     // 1. Surgery Block Operating Rooms
     if ((sem_bo1 = _init_single_sem(SEM_NAME_BO1, VAL_BO)) == SEM_FAILED) return -1;
     if ((sem_bo2 = _init_single_sem(SEM_NAME_BO2, VAL_BO)) == SEM_FAILED) return -1;
     if ((sem_bo3 = _init_single_sem(SEM_NAME_BO3, VAL_BO)) == SEM_FAILED) return -1;
 
+    #ifdef DEBUG
+        {
+            char dbg[200];
+            snprintf(dbg, sizeof(dbg), "Opened semaphores: BO1=%p BO2=%p BO3=%p", (void*)sem_bo1, (void*)sem_bo2, (void*)sem_bo3);
+            log_event(DEBUG_LOG, "IPC", "SEM_OPEN", dbg);
+        }
+    #endif
+
     // 2. Medical Teams (Shared Resource)
     if ((sem_medical_teams = _init_single_sem(SEM_NAME_TEAMS, VAL_TEAMS)) == SEM_FAILED) return -1;
+
+    #ifdef DEBUG
+        {
+            char dbg[160];
+            snprintf(dbg, sizeof(dbg), "Opened semaphore: TEAMS=%p", (void*)sem_medical_teams);
+            log_event(DEBUG_LOG, "IPC", "SEM_OPEN", dbg);
+        }
+    #endif
 
     // 3. Laboratory Equipment (LAB1, LAB2)
     if ((sem_lab1 = _init_single_sem(SEM_NAME_LAB1, VAL_LAB)) == SEM_FAILED) return -1;
     if ((sem_lab2 = _init_single_sem(SEM_NAME_LAB2, VAL_LAB)) == SEM_FAILED) return -1;
 
+    #ifdef DEBUG
+        {
+            char dbg[160];
+            snprintf(dbg, sizeof(dbg), "Opened semaphores: LAB1=%p LAB2=%p", (void*)sem_lab1, (void*)sem_lab2);
+            log_event(DEBUG_LOG, "IPC", "SEM_OPEN", dbg);
+        }
+    #endif
+
     // 4. Pharmacy Access
     if ((sem_pharmacy = _init_single_sem(SEM_NAME_PHARMACY, VAL_PHARMACY)) == SEM_FAILED) return -1;
+
+    #ifdef DEBUG
+        {
+            char dbg[160];
+            snprintf(dbg, sizeof(dbg), "Opened semaphore: PHARMACY=%p", (void*)sem_pharmacy);
+            log_event(DEBUG_LOG, "IPC", "SEM_OPEN", dbg);
+        }
+    #endif
 
     return 0;
 }
@@ -86,6 +122,9 @@ static void _close_single_sem(sem_t **sem_ptr, const char *name) {
  * Does NOT unlink the semaphores.
  */
 void close_all_semaphores(void) {
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "IPC", "SEM_CLOSE", "Closing semaphore handles for this process");
+    #endif
     // 1. Close Surgery Block Semaphores
     _close_single_sem(&sem_bo1, "BO1");
     _close_single_sem(&sem_bo2, "BO2");
@@ -122,6 +161,10 @@ static int _unlink_single_sem(const char *name) {
 int unlink_all_semaphores(void) {
     int final_status = 0;
 
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "IPC", "SEM_UNLINK", "Unlinking named semaphores");
+    #endif
+
     // 1. Unlink Surgery Block Semaphores
     if (_unlink_single_sem(SEM_NAME_BO1) != 0) final_status = -1;
     if (_unlink_single_sem(SEM_NAME_BO2) != 0) final_status = -1;
@@ -136,6 +179,12 @@ int unlink_all_semaphores(void) {
 
     // 4. Unlink Pharmacy Semaphore
     if (_unlink_single_sem(SEM_NAME_PHARMACY) != 0) final_status = -1;
+
+    #ifdef DEBUG
+        char dbg[80];
+        snprintf(dbg, sizeof(dbg), "unlink_all_semaphores() -> %d", final_status);
+        log_event(DEBUG_LOG, "IPC", "SEM_UNLINK_DONE", dbg);
+    #endif
 
     return final_status;
 }

@@ -25,6 +25,44 @@ volatile sig_atomic_t g_stop_child = 0;
 
 pthread_mutex_t state_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+static void terminate_child_process(const char *role, pid_t *pid_ptr) {
+    (void)role;
+    if (!pid_ptr || *pid_ptr <= 0) return;
+
+    #ifdef DEBUG
+        char dbg[160];
+        snprintf(dbg, sizeof(dbg), "Terminating child: role=%s pid=%d", role ? role : "UNKNOWN", (int)*pid_ptr);
+        log_event(DEBUG_LOG, "SYSTEM", "TERMINATE_CHILD", dbg);
+    #endif
+
+    if (kill(*pid_ptr, SIGTERM) == 0) {
+        int status = 0;
+        pid_t waited = waitpid(*pid_ptr, &status, 0);
+        (void)waited;
+        #ifdef DEBUG
+            char dbg[200];
+            if (waited == -1) {
+                snprintf(dbg, sizeof(dbg), "waitpid failed: role=%s pid=%d errno=%d (%s)", role ? role : "UNKNOWN", (int)*pid_ptr, errno, strerror(errno));
+            } else if (WIFEXITED(status)) {
+                snprintf(dbg, sizeof(dbg), "Child terminated: role=%s pid=%d exit_code=%d", role ? role : "UNKNOWN", (int)*pid_ptr, WEXITSTATUS(status));
+            } else if (WIFSIGNALED(status)) {
+                snprintf(dbg, sizeof(dbg), "Child terminated: role=%s pid=%d sig=%d", role ? role : "UNKNOWN", (int)*pid_ptr, WTERMSIG(status));
+            } else {
+                snprintf(dbg, sizeof(dbg), "Child terminated: role=%s pid=%d status=0x%x", role ? role : "UNKNOWN", (int)*pid_ptr, status);
+            }
+            log_event(DEBUG_LOG, "SYSTEM", "CHILD_TERMINATED", dbg);
+        #endif
+    } else {
+        #ifdef DEBUG
+            char dbg[200];
+            snprintf(dbg, sizeof(dbg), "kill(SIGTERM) failed: role=%s pid=%d errno=%d (%s)", role ? role : "UNKNOWN", (int)*pid_ptr, errno, strerror(errno));
+            log_event(DEBUG_LOG, "SYSTEM", "TERMINATE_CHILD_FAIL", dbg);
+        #endif
+    }
+
+    *pid_ptr = -1;
+}
+
 int check_shutdown() {
     int val;
 
@@ -180,6 +218,11 @@ void print_restock_format(void) {
 
 // Use only on child processes
 void child_cleanup() {
+    #ifdef DEBUG
+        char dbg[128];
+        snprintf(dbg, sizeof(dbg), "Child cleanup starting: pid=%d", (int)getpid());
+        log_event(DEBUG_LOG, "SYSTEM", "CHILD_CLEANUP", dbg);
+    #endif
     cleanup_child_shm();
     close_all_semaphores();
     cleanup_config();
@@ -188,37 +231,70 @@ void child_cleanup() {
 
 // Cleanup all resources for the manager
 void manager_cleanup() {
+    #ifdef DEBUG
+        char dbg[180];
+        snprintf(dbg, sizeof(dbg), "Manager cleanup starting: manager_pid=%d triage=%d surgery=%d pharmacy=%d lab=%d",
+                 (int)getpid(), (int)pid_triage, (int)pid_surgery, (int)pid_pharmacy, (int)pid_lab);
+        log_event(DEBUG_LOG, "SYSTEM", "MANAGER_CLEANUP", dbg);
+    #endif
+
     // Kill children if needed
-    if (pid_triage > 0) {
-        if (kill(pid_triage, SIGTERM) == 0) {
-            waitpid(pid_triage, NULL, 0);
-        }
-    }
-    if (pid_surgery > 0) {
-        if (kill(pid_surgery, SIGTERM) == 0) {
-            waitpid(pid_surgery, NULL, 0);
-        }
-    }
-    if (pid_pharmacy > 0) {
-        if (kill(pid_pharmacy, SIGTERM) == 0) {
-            waitpid(pid_pharmacy, NULL, 0);
-        }
-    }
-    if (pid_lab > 0) {
-        if (kill(pid_lab, SIGTERM) == 0) {
-            waitpid(pid_lab, NULL, 0);
-        }
-    }
+    terminate_child_process("TRIAGE", &pid_triage);
+    terminate_child_process("SURGERY", &pid_surgery);
+    terminate_child_process("PHARMACY", &pid_pharmacy);
+    terminate_child_process("LAB", &pid_lab);
 
     // Disable SHM logging before destroying SHM
     set_critical_log_shm_ptr(NULL);
 
     cleanup_scheduler();
+
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "IPC", "CLEANUP", "Cleaning shared memory segments");
+    #endif
     cleanup_all_shm();
-    remove_all_message_queues();
-    cleanup_pipes();
+
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "IPC", "CLEANUP", "Removing message queues");
+    #endif
+    int mq_status = remove_all_message_queues();
+    (void)mq_status;
+
+    #ifdef DEBUG
+        char dbg_mq[96];
+        snprintf(dbg_mq, sizeof(dbg_mq), "remove_all_message_queues() -> %d", mq_status);
+        log_event(DEBUG_LOG, "IPC", "CLEANUP_RESULT", dbg_mq);
+    #endif
+
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "IPC", "CLEANUP", "Cleaning pipes");
+    #endif
+    int pipe_status = cleanup_pipes();
+    (void)pipe_status;
+
+    #ifdef DEBUG
+        char dbg_pipe[96];
+        snprintf(dbg_pipe, sizeof(dbg_pipe), "cleanup_pipes() -> %d", pipe_status);
+        log_event(DEBUG_LOG, "IPC", "CLEANUP_RESULT", dbg_pipe);
+    #endif
+
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "IPC", "CLEANUP", "Closing semaphore handles");
+    #endif
     close_all_semaphores();
-    unlink_all_semaphores();
+
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "IPC", "CLEANUP", "Unlinking named semaphores");
+    #endif
+    int sem_unlink_status = unlink_all_semaphores();
+    (void)sem_unlink_status;
+
+    #ifdef DEBUG
+        char dbg_sem[96];
+        snprintf(dbg_sem, sizeof(dbg_sem), "unlink_all_semaphores() -> %d", sem_unlink_status);
+        log_event(DEBUG_LOG, "IPC", "CLEANUP_RESULT", dbg_sem);
+    #endif
+
     cleanup_config();
 
     log_event(INFO, "SYSTEM", "SHUTDOWN", "System shutdown complete");

@@ -29,30 +29,65 @@ static int create_shm() {
         log_event(ERROR, "IPC", "SHM_FAIL", "Failed to create shared memory");
         return -1;
     }
+    #ifdef DEBUG
+        {
+            char dbg[120];
+            snprintf(dbg, sizeof(dbg), "Created SHM_STATS id=%d", shm_stats_id);
+            log_event(DEBUG_LOG, "IPC", "SHM_CREATE", dbg);
+        }
+    #endif
 
     shm_surgery_id = shmget(ftok(FTOK_PATH, SHM_SURG_KEY), sizeof(surgery_block_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_surgery_id == -1) {
         log_event(ERROR, "IPC", "SHM_FAIL", "Failed to create shared memory");
         return -1;
     }
+    #ifdef DEBUG
+        {
+            char dbg[120];
+            snprintf(dbg, sizeof(dbg), "Created SHM_SURGERY id=%d", shm_surgery_id);
+            log_event(DEBUG_LOG, "IPC", "SHM_CREATE", dbg);
+        }
+    #endif
 
     shm_pharm_id = shmget(ftok(FTOK_PATH, SHM_PHARM_KEY), sizeof(pharmacy_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_pharm_id == -1) {
         log_event(ERROR, "IPC", "SHM_FAIL", "Failed to create shared memory");
         return -1;
     }
+    #ifdef DEBUG
+        {
+            char dbg[120];
+            snprintf(dbg, sizeof(dbg), "Created SHM_PHARMACY id=%d", shm_pharm_id);
+            log_event(DEBUG_LOG, "IPC", "SHM_CREATE", dbg);
+        }
+    #endif
 
     shm_lab_id = shmget(ftok(FTOK_PATH, SHM_LAB_KEY), sizeof(lab_queue_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_lab_id == -1) {
         log_event(ERROR, "IPC", "SHM_FAIL", "Failed to create shared memory");
         return -1;
     }
+    #ifdef DEBUG
+        {
+            char dbg[120];
+            snprintf(dbg, sizeof(dbg), "Created SHM_LAB id=%d", shm_lab_id);
+            log_event(DEBUG_LOG, "IPC", "SHM_CREATE", dbg);
+        }
+    #endif
 
     shm_log_id = shmget(ftok(FTOK_PATH, SHM_LOG_KEY), sizeof(critical_log_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_log_id == -1) {
         log_event(ERROR, "IPC", "SHM_FAIL", "Failed to create shared memory");
         return -1;
     }
+    #ifdef DEBUG
+        {
+            char dbg[120];
+            snprintf(dbg, sizeof(dbg), "Created SHM_LOG id=%d", shm_log_id);
+            log_event(DEBUG_LOG, "IPC", "SHM_CREATE", dbg);
+        }
+    #endif
 
     return 0;
 }
@@ -84,6 +119,9 @@ int init_all_shm() {
         log_event(ERROR, "IPC", "SHM", "Failed to attach Stats SHM");
         return -1;
     }
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "IPC", "SHM_ATTACH", "Attached Stats SHM");
+    #endif
 
     // Surgery
     shm_hospital->shm_surg = (surgery_block_shm_t *) attach_shm(shm_surgery_id);
@@ -91,6 +129,9 @@ int init_all_shm() {
         log_event(ERROR, "IPC", "SHM", "Failed to attach Surgery SHM");
         return -1;
     }
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "IPC", "SHM_ATTACH", "Attached Surgery SHM");
+    #endif
 
     // Pharmacy
     shm_hospital->shm_pharm = (pharmacy_shm_t *) attach_shm(shm_pharm_id);
@@ -98,6 +139,9 @@ int init_all_shm() {
         log_event(ERROR, "IPC", "SHM", "Failed to attach Pharmacy SHM");
         return -1;
     }
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "IPC", "SHM_ATTACH", "Attached Pharmacy SHM");
+    #endif
 
     // Lab
     shm_hospital->shm_lab = (lab_queue_shm_t *) attach_shm(shm_lab_id);
@@ -105,6 +149,9 @@ int init_all_shm() {
         log_event(ERROR, "IPC", "SHM", "Failed to attach Lab SHM");
         return -1;
     }
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "IPC", "SHM_ATTACH", "Attached Lab SHM");
+    #endif
 
     // Log
     shm_hospital->shm_critical_logger = (critical_log_shm_t *) attach_shm(shm_log_id);
@@ -112,6 +159,9 @@ int init_all_shm() {
         log_event(ERROR, "IPC", "SHM", "Failed to attach Log SHM");
         return -1;
     }
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "IPC", "SHM_ATTACH", "Attached Critical Log SHM");
+    #endif
 
     // --- Init SHM content ---
     memset(shm_hospital->shm_stats, 0, sizeof(global_statistics_shm_t));
@@ -155,6 +205,11 @@ int init_all_shm() {
 
 // Clean all SHM (DO NOT USE ON CHILD PROCESSES)
 void cleanup_all_shm() {
+    #ifdef DEBUG
+        char dbg[220];
+        snprintf(dbg, sizeof(dbg), "cleanup_all_shm(): stats_id=%d surg_id=%d pharm_id=%d lab_id=%d log_id=%d", shm_stats_id, shm_surgery_id, shm_pharm_id, shm_lab_id, shm_log_id);
+        log_event(DEBUG_LOG, "IPC", "SHM_CLEANUP", dbg);
+    #endif
     if (shm_hospital) {
         // Detach
         if (shm_hospital->shm_stats && shm_hospital->shm_stats != (void *)-1) shmdt(shm_hospital->shm_stats);
@@ -169,11 +224,51 @@ void cleanup_all_shm() {
     }
 
     // Remove IDs 
-    if (shm_stats_id != -1) shmctl(shm_stats_id, IPC_RMID, NULL);
-    if (shm_surgery_id != -1) shmctl(shm_surgery_id, IPC_RMID, NULL);
-    if (shm_pharm_id != -1) shmctl(shm_pharm_id, IPC_RMID, NULL);
-    if (shm_lab_id != -1) shmctl(shm_lab_id, IPC_RMID, NULL);
-    if (shm_log_id != -1) shmctl(shm_log_id, IPC_RMID, NULL);
+    if (shm_stats_id != -1) {
+        (void)shmctl(shm_stats_id, IPC_RMID, NULL);
+        #ifdef DEBUG
+            char dbg[80];
+            snprintf(dbg, sizeof(dbg), "Removed SHM_STATS id=%d", shm_stats_id);
+            log_event(DEBUG_LOG, "IPC", "SHM_RMID", dbg);
+        #endif
+        shm_stats_id = -1;
+    }
+    if (shm_surgery_id != -1) {
+        (void)shmctl(shm_surgery_id, IPC_RMID, NULL);
+        #ifdef DEBUG
+            char dbg[90];
+            snprintf(dbg, sizeof(dbg), "Removed SHM_SURGERY id=%d", shm_surgery_id);
+            log_event(DEBUG_LOG, "IPC", "SHM_RMID", dbg);
+        #endif
+        shm_surgery_id = -1;
+    }
+    if (shm_pharm_id != -1) {
+        (void)shmctl(shm_pharm_id, IPC_RMID, NULL);
+        #ifdef DEBUG
+            char dbg[95];
+            snprintf(dbg, sizeof(dbg), "Removed SHM_PHARMACY id=%d", shm_pharm_id);
+            log_event(DEBUG_LOG, "IPC", "SHM_RMID", dbg);
+        #endif
+        shm_pharm_id = -1;
+    }
+    if (shm_lab_id != -1) {
+        (void)shmctl(shm_lab_id, IPC_RMID, NULL);
+        #ifdef DEBUG
+            char dbg[80];
+            snprintf(dbg, sizeof(dbg), "Removed SHM_LAB id=%d", shm_lab_id);
+            log_event(DEBUG_LOG, "IPC", "SHM_RMID", dbg);
+        #endif
+        shm_lab_id = -1;
+    }
+    if (shm_log_id != -1) {
+        (void)shmctl(shm_log_id, IPC_RMID, NULL);
+        #ifdef DEBUG
+            char dbg[80];
+            snprintf(dbg, sizeof(dbg), "Removed SHM_LOG id=%d", shm_log_id);
+            log_event(DEBUG_LOG, "IPC", "SHM_RMID", dbg);
+        #endif
+        shm_log_id = -1;
+    }
 }
 
 // Cleans SHM to avoid mem leaks in child processes
