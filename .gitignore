@@ -2,9 +2,4 @@ notes.md
 /.vscode
 /hospital_system/obj
 /hospital_system/hospital_system
-hospital_system/logs/hospital_log.txt
-hospital_system/src/mainOld.c.bak
-hospital_system/valgrind
-hospital_system/results/lab_results
-hospital_system/results/pharmacy_deliveries
-hospital_system/results/stats_snapshots
+/hospital_system/valgrind

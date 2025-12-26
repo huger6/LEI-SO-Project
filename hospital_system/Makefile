@@ -41,6 +41,8 @@ ipc_clean:
 	-@ipcs -s | grep $$(whoami) | awk '{print $$2}' | xargs -r ipcrm -s 2>/dev/null || true
 	
 	-@ipcs -q | grep $$(whoami) | awk '{print $$2}' | xargs -r ipcrm -q 2>/dev/null || true
+
+	-@ipcrm -a
 	
 	-@rm -f /dev/shm/* 2>/dev/null || true
 	-@rm -f /dev/mqueue/* 2>/dev/null || true

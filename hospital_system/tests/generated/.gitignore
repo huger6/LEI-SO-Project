@@ -1,0 +1,6 @@
+# This directory stores generated test command files
+# Files here are created by the Python generators in ../generators/
+# and consumed by the shell runners in ../runners/
+
+*
+!.gitignore
