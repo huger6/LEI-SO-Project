@@ -28,35 +28,27 @@ sem_t *sem_pharmacy = NULL;
 // Helper function to handle the O_CREAT | O_EXCL logic for a single semaphore
 static sem_t* _init_single_sem(const char *name, int value) {
     sem_t *sem_ptr;
-    char log_buffer[256];
 
     // Attempt to create the semaphore exclusively
     sem_ptr = sem_open(name, O_CREAT | O_EXCL, SEM_PERMS, value);
 
     if (sem_ptr != SEM_FAILED) {
-        // Success: Semaphore created
         return sem_ptr;
     }
 
     // Check if failure was because it already exists
     if (errno == EEXIST) {
-        snprintf(log_buffer, sizeof(log_buffer), "Semaphore %s already exists. Reopening without O_EXCL.", name);
-        log_event(WARNING, "SEMAPHORE", "SEM_EXISTS", log_buffer);
-        
-        // Reopen existing semaphore (0 as mode/value are ignored without O_CREAT)
+        // Reopen existing semaphore
         sem_ptr = sem_open(name, 0);
-        
         if (sem_ptr == SEM_FAILED) {
-            snprintf(log_buffer, sizeof(log_buffer), "Failed to reopen existing semaphore %s. Errno: %d", name, errno);
-            log_event(ERROR, "SEMAPHORE", "SEM_REOPEN_FAIL", log_buffer);
+            log_event(ERROR, "IPC", "SEM_FAIL", "Failed to open existing semaphore");
             return SEM_FAILED;
         }
         return sem_ptr;
     }
 
     // Generic creation failure
-    snprintf(log_buffer, sizeof(log_buffer), "Failed to create semaphore %s. Errno: %d", name, errno);
-    log_event(ERROR, "SEMAPHORE", "SEM_CREATE_FAIL", log_buffer);
+    log_event(ERROR, "IPC", "SEM_FAIL", "Failed to create semaphore");
     return SEM_FAILED;
 }
 
@@ -77,22 +69,14 @@ int init_all_semaphores(void) {
     // 4. Pharmacy Access
     if ((sem_pharmacy = _init_single_sem(SEM_NAME_PHARMACY, VAL_PHARMACY)) == SEM_FAILED) return -1;
 
-    log_event(INFO, "IPC", "SEM_CREATE", "All Semaphores successfully initialized");
-
-    return 0; // Success
+    return 0;
 }
 
 // Helper to safely close a single semaphore
 static void _close_single_sem(sem_t **sem_ptr, const char *name) {
-    char log_buffer[256];
-    // Only attempt to close if the pointer is valid and not already failed
+    (void)name; // unused now
     if (*sem_ptr != NULL && *sem_ptr != SEM_FAILED) {
-        if (sem_close(*sem_ptr) != 0) {
-            // Log error but do not terminate
-            snprintf(log_buffer, sizeof(log_buffer), "Failed to close semaphore %s. Errno: %d", name, errno);
-            log_event(ERROR, "SEMAPHORE", "SEM_CLOSE_FAIL", log_buffer);
-        }
-        // Nullify pointer to prevent use-after-close
+        sem_close(*sem_ptr);
         *sem_ptr = NULL;
     }
 }
@@ -123,11 +107,7 @@ void close_all_semaphores(void) {
  * Returns -1 on failure, 0 on success.
  */
 static int _unlink_single_sem(const char *name) {
-    char log_buffer[256];
-    if (sem_unlink(name) != 0) {
-        // Log the specific error but don't abort
-        snprintf(log_buffer, sizeof(log_buffer), "Failed to unlink semaphore %s. Errno: %d", name, errno);
-        log_event(ERROR, "SEMAPHORE", "SEM_UNLINK_FAIL", log_buffer);
+    if (sem_unlink(name) != 0 && errno != ENOENT) {
         return -1;
     }
     return 0;

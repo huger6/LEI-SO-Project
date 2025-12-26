@@ -38,7 +38,7 @@ int mq_responses_id = -1;
 static int create_single_mq(int key_char, const char *name) {
     key_t key = ftok(FTOK_PATH, key_char);
     if (key == -1) {
-        log_event(ERROR, "IPC", "FTOK_FAIL", "Failed to generate key for MQ");
+        log_event(ERROR, "IPC", "MQ_FAIL", "Failed to generate key for message queue");
         return -1;
     }
 
@@ -48,17 +48,14 @@ static int create_single_mq(int key_char, const char *name) {
         if (errno == EEXIST) {
             // Q already exists, we try to get ID
             mq_id = msgget(key, 0666);
-            if (mq_id != -1) {
-                log_event(WARNING, "IPC", "MQ_REUSE", name);
-            } 
-            else {
-                log_event(ERROR, "IPC", "MQ_GET_FAIL", name);
+            if (mq_id == -1) {
+                log_event(ERROR, "IPC", "MQ_FAIL", name);
             }
         } 
         else {
             char desc[128];
             snprintf(desc, sizeof(desc), "Failed to create %s: %s", name, strerror(errno));
-            log_event(ERROR, "IPC", "MQ_CREATE_FAIL", desc);
+            log_event(ERROR, "IPC", "MQ_FAIL", desc);
         }
     }
     return mq_id;
@@ -85,37 +82,18 @@ int create_all_message_queues() {
     mq_responses_id = create_single_mq(KEY_RESPONSES, "MQ_RESPONSES");
     if (mq_responses_id == -1) return -1;
 
-    log_event(INFO, "IPC", "MQ_CREATED", "All Message Queues successfully initialized");
     return 0;
 }
 
 int remove_all_message_queues() {
     int result = 0;
 
-    if (mq_triage_id != -1 && msgctl(mq_triage_id, IPC_RMID, NULL) == -1) {
-        log_event(ERROR, "IPC", "MQ_RM_FAIL", "Failed to remove MQ_TRIAGE");
-        result = -1;
-    }
-    if (mq_surgery_id != -1 && msgctl(mq_surgery_id, IPC_RMID, NULL) == -1) {
-        log_event(ERROR, "IPC", "MQ_RM_FAIL", "Failed to remove MQ_SURGERY");
-        result = -1;
-    }
-    if (mq_pharmacy_id != -1 && msgctl(mq_pharmacy_id, IPC_RMID, NULL) == -1) {
-        log_event(ERROR, "IPC", "MQ_RM_FAIL", "Failed to remove MQ_PHARMACY");
-        result = -1;
-    }
-    if (mq_lab_id != -1 && msgctl(mq_lab_id, IPC_RMID, NULL) == -1) {
-        log_event(ERROR, "IPC", "MQ_RM_FAIL", "Failed to remove MQ_LAB");
-        result = -1;
-    }
-    if (mq_responses_id != -1 && msgctl(mq_responses_id, IPC_RMID, NULL) == -1) {
-        log_event(ERROR, "IPC", "MQ_RM_FAIL", "Failed to remove MQ_RESPONSES");
-        result = -1;
-    }
+    if (mq_triage_id != -1 && msgctl(mq_triage_id, IPC_RMID, NULL) == -1) result = -1;
+    if (mq_surgery_id != -1 && msgctl(mq_surgery_id, IPC_RMID, NULL) == -1) result = -1;
+    if (mq_pharmacy_id != -1 && msgctl(mq_pharmacy_id, IPC_RMID, NULL) == -1) result = -1;
+    if (mq_lab_id != -1 && msgctl(mq_lab_id, IPC_RMID, NULL) == -1) result = -1;
+    if (mq_responses_id != -1 && msgctl(mq_responses_id, IPC_RMID, NULL) == -1) result = -1;
 
-    if (result == 0) {
-        log_event(INFO, "IPC", "MQ_REMOVED", "All Message Queues successfully removed");
-    }
     return result;
 }
 
@@ -131,9 +109,7 @@ int send_generic_message(int mq_id, const void *msg_ptr, size_t total_struct_siz
 
     // The last argument 0 indicates BLOCKING behavior (waits if the queue is full)
     if (msgsnd(mq_id, msg_ptr, payload_size, 0) == -1) {
-        char desc[128];
-        snprintf(desc, sizeof(desc), "Failed to send message to MQ %d: %s", mq_id, strerror(errno));
-        log_event(ERROR, "IPC", "MSG_SEND_FAIL", desc);
+        log_event(ERROR, "IPC", "MSG_FAIL", "Failed to send message");
         return -1;
     }
     return 0;
@@ -157,11 +133,9 @@ int receive_generic_message(int mq_id, void *msg_buffer, size_t total_struct_siz
     ssize_t result = msgrcv(mq_id, msg_buffer, payload_size, msgtyp_priority, 0);
 
     if (result == -1) {
-        // EINTR: signal interruption
+        // EINTR: signal interruption - not an error
         if (errno != EINTR) {
-            char desc[128];
-            snprintf(desc, sizeof(desc), "Failed to receive message from MQ %d: %s", mq_id, strerror(errno));
-            log_event(ERROR, "IPC", "MSG_RCV_FAIL", desc);
+            log_event(ERROR, "IPC", "MSG_FAIL", "Failed to receive message");
         }
         return -1;
     }
@@ -184,11 +158,9 @@ int receive_specific_message(int mq_id, void *msg_buffer, size_t total_struct_si
     ssize_t result = msgrcv(mq_id, msg_buffer, payload_size, message_type, 0);
 
     if (result == -1) {
-        // EINTR: signal interruption
+        // EINTR: signal interruption - not an error
         if (errno != EINTR) {
-            char desc[128];
-            snprintf(desc, sizeof(desc), "Failed to receive specific message from MQ %d: %s", mq_id, strerror(errno));
-            log_event(ERROR, "IPC", "MSG_RCV_SPECIFIC_FAIL", desc);
+            log_event(ERROR, "IPC", "MSG_FAIL", "Failed to receive specific message");
         }
         return -1;
     }
@@ -212,12 +184,9 @@ int receive_message_up_to_type(int mq_id, void *msg_buffer, size_t total_struct_
     ssize_t result = msgrcv(mq_id, msg_buffer, payload_size, -max_type, 0);
 
     if (result == -1) {
-        // EINTR: signal interruption
+        // EINTR: signal interruption - not an error
         if (errno != EINTR) {
-            char desc[128];
-            snprintf(desc, sizeof(desc), "Failed to receive message (up to type %ld) from MQ %d: %s", 
-                     max_type, mq_id, strerror(errno));
-            log_event(ERROR, "IPC", "MSG_RCV_RANGE_FAIL", desc);
+            log_event(ERROR, "IPC", "MSG_FAIL", "Failed to receive ranged message");
         }
         return -1;
     }

@@ -25,7 +25,7 @@
 #define MAX_TREATMENT_THREADS 3
 #define PATIENT_TYPE_EMERGENCY 1
 #define PATIENT_TYPE_APPOINTMENT 2
-#define RESPONSE_TIMEOUT_UNITS 50  // Safety timeout for pharmacy/lab responses
+#define MAX_WAIT_DEPENDENCIES_TIME 2000
 
 // --- Internal Structures ---
 
@@ -48,39 +48,52 @@ typedef struct TriagePatient {
     struct TriagePatient *next;
 } TriagePatient;
 
+// --- Pending Patient Structure ---
+// Patients waiting on hold for pharmacy/lab responses (worker freed)
+typedef struct PendingPatient {
+    char id[20];
+    int type;
+    int priority;
+    int stability;
+    int arrival_time;
+    int scheduled_time;
+    int is_critical;
+    int tests_count;
+    int tests_id[3];
+    int meds_count;
+    int meds_id[5];
+    int doctor_specialty;
+    
+    // Request tracking
+    int operation_id;       // ID used for pharmacy/lab requests
+    int waiting_meds;       // 1 if waiting for pharmacy
+    int waiting_labs;       // 1 if waiting for labs
+    int meds_ok;            // 1 = pharmacy responded
+    int labs_ok;            // 1 = lab responded
+    int hold_start_time;    // Simulation time when put on hold
+    
+    struct PendingPatient *next;
+} PendingPatient;
+
 typedef struct {
     TriagePatient *head;
     int count;
     pthread_mutex_t mutex;
 } PatientQueue;
 
-// --- Treatment Control (Sync Registry for Dispatcher/Worker Pattern) ---
-
-typedef struct {
-    int active;             // 1 if thread is waiting for response
-    int operation_id;       // Unique ID sent in the request (e.g., 1000 + thread_index)
-    
-    // Sync primitives
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-    
-    // State flags
-    int meds_ok;      // 1 = Pharmacy responded
-    int labs_ok;      // 1 = Lab responded
-    
-    // Request tracking
-    int waiting_meds; // 1 if waiting for pharmacy response
-    int waiting_labs; // 1 if waiting for lab response
-} TreatmentControl;
-
-// Global array (one slot per worker thread)
-static TreatmentControl treatment_controls[MAX_TREATMENT_THREADS];
+// Global operation ID counter for pending patients
+static int next_pending_op_id = 2000;
+static pthread_mutex_t pending_op_id_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // --- Globals ---
 
 // Queues
 PatientQueue emergency_queue;
 PatientQueue appointment_queue;
+
+// Pending patients list (on hold waiting for pharmacy/lab)
+static PendingPatient *pending_patients_head = NULL;
+static pthread_mutex_t pending_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Synchronization
 pthread_mutex_t treatment_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -110,46 +123,128 @@ static void wake_all_threads(void) {
     send_generic_message(mq_triage_id, &poison_pill, sizeof(msg_new_appointment_t));
 
     safe_pthread_mutex_unlock(&treatment_mutex);
+}
+
+// --- Pending Patient Management Functions ---
+
+static int get_next_pending_op_id(void) {
+    pthread_mutex_lock(&pending_op_id_mutex);
+    int id = next_pending_op_id++;
+    pthread_mutex_unlock(&pending_op_id_mutex);
+    return id;
+}
+
+static void add_to_pending(TriagePatient *p, int operation_id, int waiting_meds, int waiting_labs) {
+    PendingPatient *pending = malloc(sizeof(PendingPatient));
+    if (!pending) {
+        log_event(ERROR, "TRIAGE", "MALLOC_FAIL", "Failed to allocate pending patient");
+        return;
+    }
     
-    // Wake up all treatment workers waiting on their condition variables
-    for (int i = 0; i < MAX_TREATMENT_THREADS; i++) {
-        safe_pthread_mutex_lock(&treatment_controls[i].mutex);
-        safe_pthread_cond_signal(&treatment_controls[i].cond);
-        safe_pthread_mutex_unlock(&treatment_controls[i].mutex);
-    }
+    strncpy(pending->id, p->id, sizeof(pending->id) - 1);
+    pending->type = p->type;
+    pending->priority = p->priority;
+    pending->stability = p->stability;
+    pending->arrival_time = p->arrival_time;
+    pending->scheduled_time = p->scheduled_time;
+    pending->is_critical = p->is_critical;
+    pending->tests_count = p->tests_count;
+    memcpy(pending->tests_id, p->tests_id, sizeof(pending->tests_id));
+    pending->meds_count = p->meds_count;
+    memcpy(pending->meds_id, p->meds_id, sizeof(pending->meds_id));
+    pending->doctor_specialty = p->doctor_specialty;
+    
+    pending->operation_id = operation_id;
+    pending->waiting_meds = waiting_meds;
+    pending->waiting_labs = waiting_labs;
+    pending->meds_ok = 0;
+    pending->labs_ok = 0;
+    pending->hold_start_time = get_simulation_time();
+    pending->next = NULL;
+    
+    safe_pthread_mutex_lock(&pending_mutex);
+    pending->next = pending_patients_head;
+    pending_patients_head = pending;
+    safe_pthread_mutex_unlock(&pending_mutex);
+    
+    char log_msg[100];
+    snprintf(log_msg, sizeof(log_msg), "Patient %s put on hold (op_id=%d)", p->id, operation_id);
+    log_event(INFO, "TRIAGE", "ON_HOLD", log_msg);
 }
 
-// --- Treatment Control Functions ---
-
-static void init_treatment_controls(void) {
-    for (int i = 0; i < MAX_TREATMENT_THREADS; i++) {
-        treatment_controls[i].active = 0;
-        treatment_controls[i].operation_id = 1000 + i;
-        treatment_controls[i].meds_ok = 0;
-        treatment_controls[i].labs_ok = 0;
-        treatment_controls[i].waiting_meds = 0;
-        treatment_controls[i].waiting_labs = 0;
-        safe_pthread_mutex_init(&treatment_controls[i].mutex, NULL);
-        safe_pthread_cond_init(&treatment_controls[i].cond, NULL);
+static PendingPatient* find_pending_by_op_id(int operation_id) {
+    // Caller must hold pending_mutex
+    PendingPatient *curr = pending_patients_head;
+    while (curr) {
+        if (curr->operation_id == operation_id) {
+            return curr;
+        }
+        curr = curr->next;
     }
+    return NULL;
 }
 
-static void cleanup_treatment_controls(void) {
-    for (int i = 0; i < MAX_TREATMENT_THREADS; i++) {
-        pthread_mutex_destroy(&treatment_controls[i].mutex);
-        pthread_cond_destroy(&treatment_controls[i].cond);
+static PendingPatient* remove_pending_by_op_id(int operation_id) {
+    // Caller must hold pending_mutex
+    PendingPatient **curr = &pending_patients_head;
+    while (*curr) {
+        if ((*curr)->operation_id == operation_id) {
+            PendingPatient *removed = *curr;
+            *curr = removed->next;
+            return removed;
+        }
+        curr = &(*curr)->next;
     }
+    return NULL;
+}
+
+static void complete_pending_patient(PendingPatient *pending) {
+    // Called when all dependencies are satisfied
+    log_event(INFO, "TRIAGE", "TREATMENT_COMPLETE", pending->id);
+    
+    safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
+    if (pending->type == PATIENT_TYPE_EMERGENCY) {
+        shm_hospital->shm_stats->completed_emergencies++;
+    } else {
+        shm_hospital->shm_stats->completed_appointments++;
+    }
+    safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
+    
+    free(pending);
+}
+
+static void check_pending_timeouts(void) {
+    int current_time = get_simulation_time();
+    
+    safe_pthread_mutex_lock(&pending_mutex);
+    
+    PendingPatient **curr = &pending_patients_head;
+    while (*curr) {
+        int wait_time = current_time - (*curr)->hold_start_time;
+        if (wait_time >= MAX_WAIT_DEPENDENCIES_TIME) {
+            PendingPatient *expired = *curr;
+            *curr = expired->next;
+            
+            char log_msg[150];
+            snprintf(log_msg, sizeof(log_msg), 
+                     "Patient %s released (exceeded max hold time of %d)",
+                     expired->id, MAX_WAIT_DEPENDENCIES_TIME);
+            log_event(WARNING, "TRIAGE", "HOLD_TIMEOUT", log_msg);
+            
+            free(expired);
+        } else {
+            curr = &(*curr)->next;
+        }
+    }
+    
+    safe_pthread_mutex_unlock(&pending_mutex);
 }
 
 // --- Response Dispatcher Thread ---
-// This is the ONLY thread that consumes messages from mq_responses_id for Triage
-// It receives messages targeted at Triage treatment workers (operation_id 1000-1002)
-// Uses blocking msgrcv with negative mtype to receive any message with mtype <= max_triage_opid
+// Handles responses for both active workers and pending patients
 
 void *response_dispatcher(void *arg) {
     (void)arg;
-    
-    log_event(INFO, "TRIAGE", "DISPATCHER_START", "Response dispatcher thread started");
     
     // Buffer for receiving messages
     union {
@@ -159,96 +254,63 @@ void *response_dispatcher(void *arg) {
         char buffer[512];
     } msg;
     
-    // Calculate the max operation_id for Triage threads
-    // Using negative mtype: msgrcv(type=-N) receives first message with mtype <= N
-    // Triage uses operation_ids 1000 to (1000 + MAX_TREATMENT_THREADS - 1)
-    // Manager uses 2000+, so they won't be received with this filter
-    long max_triage_opid = 1000 + MAX_TREATMENT_THREADS - 1;  // 1002 for 3 threads
-    
     while (!check_shutdown()) {
-        // Block waiting for any message with mtype <= max_triage_opid
-        // This receives messages for any Triage treatment thread without busy-waiting
         memset(&msg, 0, sizeof(msg));
-        int result = receive_message_up_to_type(mq_responses_id, &msg, sizeof(msg), max_triage_opid);
+        
+        // Receive any message type (0 = FIFO order)
+        int result = receive_generic_message(mq_responses_id, &msg, sizeof(msg), 0);
         
         if (result == -1) {
-            // Error or signal interruption, check shutdown and retry
+            if (errno == EINTR) continue;
             if (check_shutdown()) break;
             continue;
         }
         
         // Check for shutdown message
         if (msg.hdr.kind == MSG_SHUTDOWN) {
-            log_event(INFO, "TRIAGE", "DISPATCHER_SHUTDOWN", "Received shutdown notification");
             break;
         }
         
-        // Extract operation_id from mtype (which was set to operation_id by sender)
+        // Extract operation_id from mtype
         int operation_id = (int)msg.hdr.mtype;
-        int thread_index = operation_id - 1000;
         
-        // Validate thread index
-        if (thread_index < 0 || thread_index >= MAX_TREATMENT_THREADS) {
-            char err_msg[64];
-            snprintf(err_msg, sizeof(err_msg), "Invalid operation_id from mtype: %d", operation_id);
-            log_event(WARNING, "TRIAGE", "DISPATCHER_INVALID_OP", err_msg);
-            continue;
-        }
-        
-        TreatmentControl *ctrl = &treatment_controls[thread_index];
-        
-        safe_pthread_mutex_lock(&ctrl->mutex);
-        
-        // Only process if the thread is actively waiting
-        if (!ctrl->active) {
-            safe_pthread_mutex_unlock(&ctrl->mutex);
-            char warn_msg[64];
-            snprintf(warn_msg, sizeof(warn_msg), "Response for inactive thread %d", thread_index);
-            log_event(WARNING, "TRIAGE", "DISPATCHER_STALE", warn_msg);
-            continue;
-        }
-        
-        // Update flags based on message kind
-        switch (msg.hdr.kind) {
-            case MSG_PHARM_READY:
-                ctrl->meds_ok = 1;
-                {
-                    char log_msg[64];
-                    snprintf(log_msg, sizeof(log_msg), "Pharmacy response for thread %d", thread_index);
-                    log_event(INFO, "TRIAGE", "DISPATCHER_PHARM", log_msg);
+        // Check if this is for a pending patient (op_id >= 2000)
+        if (operation_id >= 2000) {
+            safe_pthread_mutex_lock(&pending_mutex);
+            PendingPatient *pending = find_pending_by_op_id(operation_id);
+            
+            if (pending) {
+                // Update flags based on message kind
+                if (msg.hdr.kind == MSG_PHARM_READY) {
+                    pending->meds_ok = 1;
+                } else if (msg.hdr.kind == MSG_LAB_RESULTS_READY) {
+                    pending->labs_ok = 1;
                 }
-                break;
                 
-            case MSG_LAB_RESULTS_READY:
-                ctrl->labs_ok = 1;
-                {
-                    char log_msg[64];
-                    snprintf(log_msg, sizeof(log_msg), "Lab response for thread %d", thread_index);
-                    log_event(INFO, "TRIAGE", "DISPATCHER_LAB", log_msg);
-                }
-                break;
+                // Check if all dependencies are satisfied
+                int meds_done = !pending->waiting_meds || pending->meds_ok;
+                int labs_done = !pending->waiting_labs || pending->labs_ok;
                 
-            default:
-                {
-                    char log_msg[64];
-                    snprintf(log_msg, sizeof(log_msg), "Unknown message kind %d for thread %d", msg.hdr.kind, thread_index);
-                    log_event(WARNING, "TRIAGE", "DISPATCHER_UNKNOWN", log_msg);
+                if (meds_done && labs_done) {
+                    // Remove from pending and complete
+                    PendingPatient *removed = remove_pending_by_op_id(operation_id);
+                    safe_pthread_mutex_unlock(&pending_mutex);
+                    
+                    if (removed) {
+                        complete_pending_patient(removed);
+                    }
+                } else {
+                    safe_pthread_mutex_unlock(&pending_mutex);
                 }
-                break;
+            } else {
+                safe_pthread_mutex_unlock(&pending_mutex);
+            }
         }
         
-        // Signal the waiting worker thread
-        safe_pthread_cond_signal(&ctrl->cond);
-        safe_pthread_mutex_unlock(&ctrl->mutex);
-    }
-    // On shutdown, wake up all waiting worker threads
-    for (int i = 0; i < MAX_TREATMENT_THREADS; i++) {
-        safe_pthread_mutex_lock(&treatment_controls[i].mutex);
-        safe_pthread_cond_signal(&treatment_controls[i].cond);
-        safe_pthread_mutex_unlock(&treatment_controls[i].mutex);
+        // Check for expired pending patients after each message
+        check_pending_timeouts();
     }
     
-    log_event(INFO, "TRIAGE", "DISPATCHER_STOP", "Response dispatcher thread stopped");
     return NULL;
 }
 
@@ -497,25 +559,13 @@ void *vital_stability_monitor(void *arg) {
         }
         safe_pthread_mutex_unlock(&emergency_queue.mutex);
 
-        // 2. Check Appointment Queue
+        // 2. Check Appointment Queue (no stability decrement for appointments)
         safe_pthread_mutex_lock(&appointment_queue.mutex);
         curr = appointment_queue.head;
         prev = NULL;
         
         while (curr) {
-            curr->stability--;
-            
-             if (curr->stability <= 0) {
-                log_event(CRITICAL, "TRIAGE", "PATIENT_DIED", curr->id);
-                if (prev) prev->next = curr->next;
-                else appointment_queue.head = curr->next;
-                TriagePatient *to_free = curr;
-                curr = curr->next;
-                appointment_queue.count--;
-                free(to_free);
-                continue;
-            }
-
+            // Appointments don't have stability decremented, but check if already critical
             if (curr->stability <= config->triage_critical_stability) {
                 // Move to Emergency Queue
                 log_event(CRITICAL, "TRIAGE", "APPT_CRITICAL", curr->id);
@@ -529,8 +579,7 @@ void *vital_stability_monitor(void *arg) {
                 
                 // Add to Emergency Queue
                 to_move->is_critical = 1;
-                to_move->type = PATIENT_TYPE_EMERGENCY; // Convert to emergency?
-                // Prompt says "moved to the top of the emergency queue".
+                to_move->type = PATIENT_TYPE_EMERGENCY; // Convert to emergency
                 
                 safe_pthread_mutex_lock(&emergency_queue.mutex);
                 insert_emergency_sorted(to_move);
@@ -555,7 +604,7 @@ void *treatment_worker(void *arg) {
     int thread_id = *(int*)arg;
     free(arg);
     
-    TreatmentControl *ctrl = &treatment_controls[thread_id];
+    (void)thread_id;  // Not used in new pending-based system
     
     while (!check_shutdown()) {
         TriagePatient *p = NULL;
@@ -606,11 +655,9 @@ void *treatment_worker(void *arg) {
         int wait_time = 0;
         
         if (p->type == PATIENT_TYPE_APPOINTMENT) {
-            // For appointments, wait time is delay after scheduled time
             wait_time = diff_time_units(p->scheduled_time, current_time);
             if (wait_time < 0) wait_time = 0;
         } else {
-            // For emergencies, wait time is delay after arrival
             wait_time = diff_time_units(p->arrival_time, current_time);
         }
 
@@ -627,148 +674,70 @@ void *treatment_worker(void *arg) {
         
         wait_time_units(duration);
         
-        // --- Prepare TreatmentControl for passive waiting ---
-        safe_pthread_mutex_lock(&ctrl->mutex);
-        ctrl->meds_ok = 0;
-        ctrl->labs_ok = 0;
-        ctrl->waiting_meds = (p->meds_count > 0) ? 1 : 0;
-        ctrl->waiting_labs = (p->tests_count > 0) ? 1 : 0;
-        ctrl->operation_id = 1000 + thread_id;
-        ctrl->active = 1;
-        safe_pthread_mutex_unlock(&ctrl->mutex);
+        // Update triage usage time statistics
+        safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
+        shm_hospital->shm_stats->total_triage_usage_time += (double)duration;
+        safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
         
-        // --- Send async requests ---
+        // Check if patient needs meds or labs
+        int needs_meds = (p->meds_count > 0);
+        int needs_labs = (p->tests_count > 0);
         
-        // Meds
-        if (p->meds_count > 0) {
-            msg_pharmacy_request_t req;
-            memset(&req, 0, sizeof(msg_pharmacy_request_t));
-            req.hdr.mtype = PRIORITY_NORMAL;
-            req.hdr.kind = MSG_PHARMACY_REQUEST;
-            strcpy(req.hdr.patient_id, p->id);
-            req.hdr.operation_id = 1000 + thread_id;
-            req.hdr.timestamp = time(NULL);
-            req.sender = SENT_BY_TRIAGE;
-            req.meds_count = p->meds_count;
-            memcpy(req.meds_id, p->meds_id, sizeof(req.meds_id));
-            for(int i=0; i<8; i++) req.meds_qty[i] = 1; 
+        if (needs_meds || needs_labs) {
+            // Get unique operation ID for this patient
+            int operation_id = get_next_pending_op_id();
             
-            send_generic_message(mq_pharmacy_id, &req, sizeof(msg_pharmacy_request_t));
-        }
-        
-        // Labs
-        if (p->tests_count > 0) {
-            msg_lab_request_t req;
-            memset(&req, 0, sizeof(msg_lab_request_t));
-            req.hdr.mtype = PRIORITY_NORMAL;
-            req.hdr.kind = MSG_LAB_REQUEST;
-            strcpy(req.hdr.patient_id, p->id);
-            req.hdr.operation_id = 1000 + thread_id;
-            req.hdr.timestamp = time(NULL);
-            req.sender = SENT_BY_TRIAGE;
-            req.tests_count = p->tests_count;
-            memcpy(req.tests_id, p->tests_id, sizeof(p->tests_id));
-            
-            send_generic_message(mq_lab_id, &req, sizeof(msg_lab_request_t));
-        }
-        
-        // --- Passive Wait using pthread_cond_timedwait ---
-        int pharmacy_success = 1;
-        int lab_success = 1;
-        int wait_result = 0;  // 0 = success, -1 = shutdown, -2 = timeout
-        
-        if (ctrl->waiting_meds || ctrl->waiting_labs) {
-            // Calculate absolute timeout time
-            struct timespec timeout_abs;
-            clock_gettime(CLOCK_REALTIME, &timeout_abs);
-            
-            // Add timeout: RESPONSE_TIMEOUT_UNITS * time_unit_ms milliseconds
-            long timeout_ms = (long)RESPONSE_TIMEOUT_UNITS * config->time_unit_ms;
-            timeout_abs.tv_sec += timeout_ms / 1000;
-            timeout_abs.tv_nsec += (timeout_ms % 1000) * 1000000L;
-            
-            // Normalize nanoseconds
-            if (timeout_abs.tv_nsec >= 1000000000L) {
-                timeout_abs.tv_sec += 1;
-                timeout_abs.tv_nsec -= 1000000000L;
+            // Send async requests
+            if (needs_meds) {
+                msg_pharmacy_request_t req;
+                memset(&req, 0, sizeof(msg_pharmacy_request_t));
+                req.hdr.mtype = operation_id;
+                req.hdr.kind = MSG_PHARMACY_REQUEST;
+                strcpy(req.hdr.patient_id, p->id);
+                req.hdr.operation_id = operation_id;
+                req.hdr.timestamp = time(NULL);
+                req.sender = SENT_BY_TRIAGE;
+                req.meds_count = p->meds_count;
+                memcpy(req.meds_id, p->meds_id, sizeof(req.meds_id));
+                for(int i = 0; i < 8; i++) req.meds_qty[i] = 1;
+                
+                send_generic_message(mq_pharmacy_id, &req, sizeof(msg_pharmacy_request_t));
             }
             
-            safe_pthread_mutex_lock(&ctrl->mutex);
-            
-            // Wait until all expected responses are received, or timeout/shutdown
-            while (ctrl->active && !check_shutdown()) {
-                // Check if we have all responses we're waiting for
-                int meds_done = !ctrl->waiting_meds || ctrl->meds_ok;
-                int labs_done = !ctrl->waiting_labs || ctrl->labs_ok;
+            if (needs_labs) {
+                msg_lab_request_t req;
+                memset(&req, 0, sizeof(msg_lab_request_t));
+                req.hdr.mtype = operation_id;
+                req.hdr.kind = MSG_LAB_REQUEST;
+                strcpy(req.hdr.patient_id, p->id);
+                req.hdr.operation_id = operation_id;
+                req.hdr.timestamp = time(NULL);
+                req.sender = SENT_BY_TRIAGE;
+                req.tests_count = p->tests_count;
+                memcpy(req.tests_id, p->tests_id, sizeof(p->tests_id));
                 
-                if (meds_done && labs_done) {
-                    break;  // All responses received
-                }
-                
-                // Wait with timeout
-                int rc = pthread_cond_timedwait(&ctrl->cond, &ctrl->mutex, &timeout_abs);
-                
-                if (rc == ETIMEDOUT) {
-                    wait_result = -2;  // Timeout
-                    break;
-                }
+                send_generic_message(mq_lab_id, &req, sizeof(msg_lab_request_t));
             }
             
-            // Check final state
-            if (check_shutdown()) {
-                wait_result = -1;  // Shutdown
-            } else if (wait_result == 0) {
-                // Check if we got all responses
-                if (ctrl->waiting_meds && !ctrl->meds_ok) {
-                    pharmacy_success = 0;
-                }
-                if (ctrl->waiting_labs && !ctrl->labs_ok) {
-                    lab_success = 0;
-                }
-            } else if (wait_result == -2) {
-                // Timeout - check which ones failed
-                if (ctrl->waiting_meds && !ctrl->meds_ok) {
-                    pharmacy_success = 0;
-                    char err_msg[64];
-                    snprintf(err_msg, sizeof(err_msg), "Pharmacy timeout for patient %s", p->id);
-                    log_event(ERROR, "TRIAGE", "PHARMACY_TIMEOUT", err_msg);
-                }
-                if (ctrl->waiting_labs && !ctrl->labs_ok) {
-                    lab_success = 0;
-                    char err_msg[64];
-                    snprintf(err_msg, sizeof(err_msg), "Lab timeout for patient %s", p->id);
-                    log_event(ERROR, "TRIAGE", "LAB_TIMEOUT", err_msg);
-                }
-            }
-            
-            // Cleanup: deactivate
-            ctrl->active = 0;
-            safe_pthread_mutex_unlock(&ctrl->mutex);
-        }
-        
-        // Handle shutdown case
-        if (wait_result == -1) {
-            log_event(WARNING, "TRIAGE", "SHUTDOWN_ABORT", p->id);
+            // Put patient on hold and free worker
+            add_to_pending(p, operation_id, needs_meds, needs_labs);
             free(p);
+            
             safe_pthread_mutex_lock(&treatment_mutex);
             active_treatments--;
             safe_pthread_mutex_unlock(&treatment_mutex);
-            break;
+            continue;
         }
         
-        // Log treatment completion with status
-        if (pharmacy_success && lab_success) {
-            log_event(INFO, "TRIAGE", "TREATMENT_COMPLETE", p->id);
-        } else {
-            char status_msg[128];
-            snprintf(status_msg, sizeof(status_msg), "%s (meds:%s, tests:%s)", 
-                     p->id, pharmacy_success ? "OK" : "FAILED", lab_success ? "OK" : "FAILED");
-            log_event(WARNING, "TRIAGE", "TREATMENT_PARTIAL", status_msg);
-        }
+        // No meds or labs needed, complete immediately
+        log_event(INFO, "TRIAGE", "TREATMENT_COMPLETE", p->id);
         
         safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
-        if (p->type == PATIENT_TYPE_EMERGENCY) shm_hospital->shm_stats->completed_emergencies++;
-        else shm_hospital->shm_stats->completed_appointments++;
+        if (p->type == PATIENT_TYPE_EMERGENCY) {
+            shm_hospital->shm_stats->completed_emergencies++;
+        } else {
+            shm_hospital->shm_stats->completed_appointments++;
+        }
         safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
         
         free(p);
@@ -783,17 +752,10 @@ void *treatment_worker(void *arg) {
 // --- Main Triage Process ---
 
 void triage_main(void) {
-    log_event(INFO, "TRIAGE", "STARTUP", "Booting triage process");
-
     setup_child_signals();
-
-    close_unused_pipe_ends(ROLE_TRIAGE);
     
     init_queue(&emergency_queue);
     init_queue(&appointment_queue);
-    
-    // Initialize TreatmentControl sync registry
-    init_treatment_controls();
     
     // Start Threads
     safe_pthread_create(&t_emergency_mgr, NULL, emergency_queue_manager, NULL);
@@ -829,13 +791,15 @@ void triage_main(void) {
         safe_pthread_join(t_treatments[i], NULL);
     }
     
-    // Cleanup TreatmentControl resources
-    cleanup_treatment_controls();
+    // Cleanup pending patients list
+    safe_pthread_mutex_lock(&pending_mutex);
+    while (pending_patients_head) {
+        PendingPatient *next = pending_patients_head->next;
+        free(pending_patients_head);
+        pending_patients_head = next;
+    }
+    safe_pthread_mutex_unlock(&pending_mutex);
     
-    log_event(INFO, "TRIAGE", "SHUTDOWN", "Triage process shutting down");
-
-    // Resources cleanup
-    log_event(INFO, "TRIAGE", "RESOURCES_CLEANUP", "Cleaning triage resources");
     child_cleanup();
 
     exit(EXIT_SUCCESS);

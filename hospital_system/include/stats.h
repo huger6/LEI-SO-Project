@@ -59,7 +59,6 @@ typedef struct {
 
 // --- Function Headers ---
 
-void init_stats(system_config_t *sys_ptr);
 void display_statistics_console(global_statistics_shm_t *stats, const char *component);
 void save_statistics_snapshot(global_statistics_shm_t *stats);
 void init_stats_default(global_statistics_shm_t *stats, pthread_mutexattr_t *attr);

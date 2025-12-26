@@ -54,6 +54,8 @@ typedef struct {
     int med_count;
 } system_config_t;
 
+// Note: system_config_t should only be accessed to READ
+
 extern system_config_t *config;
 
 

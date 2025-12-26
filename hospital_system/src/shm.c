@@ -24,40 +24,33 @@ hospital_shm_t *shm_hospital = NULL;
 
 // Create all SHM IDS (no attach)
 static int create_shm() {
-    char log_buffer[256];
-
     shm_stats_id = shmget(ftok(FTOK_PATH, SHM_STATS_KEY), sizeof(global_statistics_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_stats_id == -1) {
-        snprintf(log_buffer, sizeof(log_buffer), "Failed to create Stats SHM: %s", strerror(errno));
-        log_event(ERROR, "IPC", "SHM", log_buffer);
+        log_event(ERROR, "IPC", "SHM_FAIL", "Failed to create shared memory");
         return -1;
     }
 
     shm_surgery_id = shmget(ftok(FTOK_PATH, SHM_SURG_KEY), sizeof(surgery_block_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_surgery_id == -1) {
-        snprintf(log_buffer, sizeof(log_buffer), "Failed to create Surgery SHM: %s", strerror(errno));
-        log_event(ERROR, "IPC", "SHM", log_buffer);
+        log_event(ERROR, "IPC", "SHM_FAIL", "Failed to create shared memory");
         return -1;
     }
 
     shm_pharm_id = shmget(ftok(FTOK_PATH, SHM_PHARM_KEY), sizeof(pharmacy_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_pharm_id == -1) {
-        snprintf(log_buffer, sizeof(log_buffer), "Failed to create Pharmacy SHM: %s", strerror(errno));
-        log_event(ERROR, "IPC", "SHM", log_buffer);
+        log_event(ERROR, "IPC", "SHM_FAIL", "Failed to create shared memory");
         return -1;
     }
 
     shm_lab_id = shmget(ftok(FTOK_PATH, SHM_LAB_KEY), sizeof(lab_queue_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_lab_id == -1) {
-        snprintf(log_buffer, sizeof(log_buffer), "Failed to create Lab SHM: %s", strerror(errno));
-        log_event(ERROR, "IPC", "SHM", log_buffer);
+        log_event(ERROR, "IPC", "SHM_FAIL", "Failed to create shared memory");
         return -1;
     }
 
     shm_log_id = shmget(ftok(FTOK_PATH, SHM_LOG_KEY), sizeof(critical_log_shm_t), IPC_CREAT | IPC_EXCL | 0666);
     if (shm_log_id == -1) {
-        snprintf(log_buffer, sizeof(log_buffer), "Failed to create Log SHM: %s", strerror(errno));
-        log_event(ERROR, "IPC", "SHM", log_buffer);
+        log_event(ERROR, "IPC", "SHM_FAIL", "Failed to create shared memory");
         return -1;
     }
 
@@ -162,7 +155,6 @@ int init_all_shm() {
 
 // Clean all SHM (DO NOT USE ON CHILD PROCESSES)
 void cleanup_all_shm() {
-    log_event(INFO, "IPC", "SHM", "Starting SHM resources cleanup");
     if (shm_hospital) {
         // Detach
         if (shm_hospital->shm_stats && shm_hospital->shm_stats != (void *)-1) shmdt(shm_hospital->shm_stats);
@@ -182,8 +174,6 @@ void cleanup_all_shm() {
     if (shm_pharm_id != -1) shmctl(shm_pharm_id, IPC_RMID, NULL);
     if (shm_lab_id != -1) shmctl(shm_lab_id, IPC_RMID, NULL);
     if (shm_log_id != -1) shmctl(shm_log_id, IPC_RMID, NULL);
-
-    log_event(INFO, "IPC", "SHM", "Finished cleaning SHM resources");
 }
 
 // Cleans SHM to avoid mem leaks in child processes

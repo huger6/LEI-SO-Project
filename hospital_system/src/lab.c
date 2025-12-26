@@ -615,8 +615,6 @@ static int spawn_worker(msg_lab_request_t *request) {
 static void dispatcher_loop(void) {
     msg_lab_request_t request;
     
-    log_event(INFO, "LAB", "DISPATCHER_START", "Lab dispatcher loop started");
-    
     while (!check_shutdown()) {
         // Clear message buffer
         memset(&request, 0, sizeof(request));
@@ -644,6 +642,13 @@ static void dispatcher_loop(void) {
             continue;
         }
         
+        // Update statistics - track urgent lab tests
+        safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
+        if (request.hdr.mtype == PRIORITY_URGENT) {
+            shm_hospital->shm_stats->urgent_lab_tests++;
+        }
+        safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
+        
         // Log received request
         char log_msg[128];
         snprintf(log_msg, sizeof(log_msg), "Received lab request for %s (%d tests, op_id: %d)",
@@ -657,40 +662,20 @@ static void dispatcher_loop(void) {
             send_results_notification(request.hdr.patient_id, request.hdr.operation_id, 0, request.sender);
         }
     }
-    
-    log_event(INFO, "LAB", "DISPATCHER_STOP", "Lab dispatcher loop stopped");
 }
 
 // --- Main Entry Point ---
 
-/**
- * Laboratory Process Main Function
- */
 void lab_main(void) {
-    log_event(INFO, "LAB", "STARTUP", "Booting laboratory process");
-
     setup_child_signals();
-
-    close_unused_pipe_ends(ROLE_LAB);
-
-    // Seed random number generator (unique per process)
+    
+    // Seed random number generator
     srand((unsigned int)(time(NULL) ^ getpid()));
-    
-    // Setup child signal handlers
-    setup_child_signals();
-    
-    log_event(INFO, "LAB", "INIT", "Laboratory process initialized");
     
     // Run the dispatcher loop
     dispatcher_loop();
     
-    // Cleanup on shutdown
-    log_event(INFO, "LAB", "SHUTDOWN", "Laboratory process shutting down");
-    
-    // Resources cleanup
-    log_event(INFO, "LAB", "RESOURCES_CLEANUP", "Cleaning laboratory resources");
     child_cleanup();
-
     exit(EXIT_SUCCESS);
 }
 

@@ -11,7 +11,7 @@ typedef enum {
     ERROR = 2,
     WARNING = 3,
     INFO = 4,
-    DEBUG = 5
+    DEBUG_LOG = 5
 } log_severity_t;
 
 // Critical logs (SHM5)

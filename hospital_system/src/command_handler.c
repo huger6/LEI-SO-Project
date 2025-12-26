@@ -16,6 +16,70 @@
 #include "../include/manager_utils.h"
 #include "../include/safe_threads.h"
 
+// Global surgery ID counter (unique IDs start at 1)
+static int next_surgery_id = 1;
+static pthread_mutex_t surgery_id_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static int get_next_surgery_id(void) {
+    pthread_mutex_lock(&surgery_id_mutex);
+    int id = next_surgery_id++;
+    pthread_mutex_unlock(&surgery_id_mutex);
+    return id;
+}
+
+// Test IDs (must match console_input.c get_test_id)
+#define TEST_HEMO       0
+#define TEST_GLIC       1
+#define TEST_COLEST     2
+#define TEST_RENAL      3
+#define TEST_HEPAT      4
+#define TEST_PREOP      5
+
+// Lab types for LAB_REQUEST command
+typedef enum {
+    LAB_TYPE_NONE = 0,
+    LAB_TYPE_LAB1 = 1,   // Hematology: HEMO, GLIC
+    LAB_TYPE_LAB2 = 2,   // Biochemistry: COLEST, RENAL, HEPAT
+    LAB_TYPE_BOTH = 3    // Both labs: PREOP (requires LAB1 then LAB2)
+} lab_type_t;
+
+/**
+ * Validates that all tests in the request are compatible with the specified lab.
+ * @param lab_type The lab specified (LAB1, LAB2, or BOTH)
+ * @param tests_id Array of test IDs
+ * @param tests_count Number of tests
+ * @return 1 if valid, 0 if invalid
+ */
+static int validate_lab_tests(lab_type_t lab_type, int *tests_id, int tests_count) {
+    if (tests_count <= 0) return 0;  // Must have at least one test
+    
+    for (int i = 0; i < tests_count; i++) {
+        int test_id = tests_id[i];
+        
+        switch (lab_type) {
+            case LAB_TYPE_LAB1:
+                // LAB1 (Hematology) can only perform HEMO and GLIC
+                if (test_id != TEST_HEMO && test_id != TEST_GLIC) {
+                    return 0;
+                }
+                break;
+            case LAB_TYPE_LAB2:
+                // LAB2 (Biochemistry) can only perform COLEST, RENAL, HEPAT
+                if (test_id != TEST_COLEST && test_id != TEST_RENAL && test_id != TEST_HEPAT) {
+                    return 0;
+                }
+                break;
+            case LAB_TYPE_BOTH:
+                // BOTH can perform PREOP (which requires both labs) or any single-lab test
+                // All tests are valid for BOTH
+                break;
+            default:
+                return 0;
+        }
+    }
+    return 1;
+}
+
 void handle_command(char *cmd_buf, int current_time) {
     char *saveptr;
     char *cmd = strtok_r(cmd_buf, " ", &saveptr);
@@ -60,7 +124,7 @@ void handle_command(char *cmd_buf, int current_time) {
         
         msg_new_emergency_t msg;
         memset(&msg, 0, sizeof(msg));
-        msg.hdr.mtype = 1;
+        msg.hdr.mtype = MSG_NEW_EMERGENCY;
         msg.hdr.kind = MSG_NEW_EMERGENCY;
         strncpy(msg.hdr.patient_id, code, sizeof(msg.hdr.patient_id) - 1);
         
@@ -132,7 +196,7 @@ void handle_command(char *cmd_buf, int current_time) {
         
         msg_new_appointment_t msg;
         memset(&msg, 0, sizeof(msg));
-        msg.hdr.mtype = 1;
+        msg.hdr.mtype = MSG_NEW_APPOINTMENT;
         msg.hdr.kind = MSG_NEW_APPOINTMENT;
         strncpy(msg.hdr.patient_id, code, sizeof(msg.hdr.patient_id) - 1);
         
@@ -205,6 +269,7 @@ void handle_command(char *cmd_buf, int current_time) {
         memset(&msg, 0, sizeof(msg));
         msg.hdr.mtype = 1;
         msg.hdr.kind = MSG_NEW_SURGERY;
+        msg.hdr.operation_id = get_next_surgery_id();  // Assign unique surgery ID
         strncpy(msg.hdr.patient_id, code, sizeof(msg.hdr.patient_id) - 1);
         
         int init = -1;
@@ -329,6 +394,7 @@ void handle_command(char *cmd_buf, int current_time) {
         memset(&msg, 0, sizeof(msg));
         msg.hdr.mtype = 1;
         msg.hdr.kind = MSG_PHARMACY_REQUEST;
+        msg.sender = SENT_BY_MANAGER;
         strncpy(msg.hdr.patient_id, code, sizeof(msg.hdr.patient_id) - 1);
         
         int init = -1;
@@ -398,6 +464,7 @@ void handle_command(char *cmd_buf, int current_time) {
         
         int init = -1;
         int priority = -1;
+        lab_type_t lab_type = LAB_TYPE_NONE;
         int has_init = 0, has_priority = 0, has_lab = 0;
 
         char *token;
@@ -416,9 +483,14 @@ void handle_command(char *cmd_buf, int current_time) {
             } else if (strcmp(token, "lab:") == 0) {
                 char *val = strtok_r(NULL, " ", &saveptr);
                 if (val) {
-                    if (strcasecmp(val, "LAB1") == 0 || 
-                        strcasecmp(val, "LAB2") == 0 || 
-                        strcasecmp(val, "BOTH") == 0) {
+                    if (strcasecmp(val, "LAB1") == 0) {
+                        lab_type = LAB_TYPE_LAB1;
+                        has_lab = 1;
+                    } else if (strcasecmp(val, "LAB2") == 0) {
+                        lab_type = LAB_TYPE_LAB2;
+                        has_lab = 1;
+                    } else if (strcasecmp(val, "BOTH") == 0) {
+                        lab_type = LAB_TYPE_BOTH;
                         has_lab = 1;
                     }
                 }
@@ -440,6 +512,13 @@ void handle_command(char *cmd_buf, int current_time) {
         }
         if (!has_lab) {
             log_event(WARNING, "MANAGER", "INVALID_CMD", "LAB_REQUEST: Invalid/Missing lab (LAB1/LAB2/BOTH)");
+            print_lab_format();
+            return;
+        }
+        
+        // Validate that tests are compatible with the specified lab
+        if (!validate_lab_tests(lab_type, msg.tests_id, msg.tests_count)) {
+            log_event(WARNING, "MANAGER", "INVALID_CMD", "LAB_REQUEST: Tests incompatible with specified lab (LAB1: HEMO/GLIC, LAB2: COLEST/RENAL/HEPAT, BOTH: any)");
             print_lab_format();
             return;
         }

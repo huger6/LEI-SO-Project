@@ -19,7 +19,7 @@ static ScheduledEvent *scheduled_events_head = NULL;
 void add_scheduled_event(int init_time, int mq_id, void *msg, size_t size) {
     ScheduledEvent *new_event = (ScheduledEvent *)malloc(sizeof(ScheduledEvent));
     if (!new_event) {
-        log_event(ERROR, "SCHEDULER", "MALLOC_FAIL", "Failed to allocate memory for scheduled event");
+        log_event(ERROR, "SCHEDULER", "ALLOC_FAIL", "Failed to schedule event");
         return;
     }
 
@@ -28,7 +28,7 @@ void add_scheduled_event(int init_time, int mq_id, void *msg, size_t size) {
     new_event->msg_size = size;
     new_event->msg_data = malloc(size);
     if (!new_event->msg_data) {
-        log_event(ERROR, "SCHEDULER", "MALLOC_FAIL", "Failed to allocate memory for message data");
+        log_event(ERROR, "SCHEDULER", "ALLOC_FAIL", "Failed to schedule event");
         free(new_event);
         return;
     }
@@ -42,17 +42,12 @@ void add_scheduled_event(int init_time, int mq_id, void *msg, size_t size) {
     } 
     else {
         ScheduledEvent *current = scheduled_events_head;
-        // Find the last event that is <= new_event->init_time to maintain stable sort for same times
         while (current->next && current->next->init_time <= init_time) {
             current = current->next;
         }
         new_event->next = current->next;
         current->next = new_event;
     }
-
-    char log_msg[128];
-    snprintf(log_msg, sizeof(log_msg), "Event scheduled for time %d", init_time);
-    log_event(INFO, "SCHEDULER", "EVENT_ADDED", log_msg);
 }
 
 void process_scheduled_events(int current_time) {
@@ -61,19 +56,6 @@ void process_scheduled_events(int current_time) {
         
         // Execute event
         send_generic_message(current->mq_id, current->msg_data, current->msg_size);
-
-        // Debug logging for EMERGENCY command
-        msg_header_t *hdr = (msg_header_t *)current->msg_data;
-        if (hdr->kind == MSG_NEW_EMERGENCY) {
-            log_event(INFO, "SCHEDULER", "EMERGENCY_SENT", "Emergency sent to triage (scheduled)");
-        }
-        
-        #ifdef DEBUG
-            char log_msg[128];
-            snprintf(log_msg, sizeof(log_msg), "Executed event scheduled for %d at time %d", 
-                    current->init_time, current_time);
-            log_event(DEBUG, "SCHEDULER", "EVENT_EXEC", log_msg);
-        #endif
 
         // Remove from list (head)
         scheduled_events_head = current->next;
@@ -104,5 +86,4 @@ void cleanup_scheduler(void) {
         }
         free(temp);
     }
-    log_event(INFO, "SCHEDULER", "CLEANUP", "Scheduler resources freed");
 }

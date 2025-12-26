@@ -1,25 +1,12 @@
 #ifndef PIPE_H
 #define PIPE_H
 
+#include <stddef.h>
 
-typedef enum {
-    PIPE_INPUT,
-    PIPE_SIGNAL,
-    PIPE_TRIAGE,
-    PIPE_SURGERY,
-    PIPE_PHARMACY,
-    PIPE_LAB
-} PipeID;
+// Named pipe path for external command input
+#define INPUT_PIPE_PATH "input_pipe"
 
-
-typedef enum {
-    PIPE_CMD_SHUTDOWN,      // Graceful shutdown request
-    PIPE_CMD_PAUSE,         // Pause operations
-    PIPE_CMD_RESUME,        // Resume operations
-    PIPE_CMD_STATUS         // Request status update to be written to SHM
-} PipeCommand;
-
-
+// Process roles (for documentation, no longer used for pipe management)
 typedef enum {
     ROLE_MANAGER,           // The Central Manager Process
     ROLE_TRIAGE,            // Triage Center
@@ -31,17 +18,19 @@ typedef enum {
 
 // --- Function Headers ---
 
+// Initialize the named input pipe (FIFO) and signal self-pipe
+int init_pipes(void);
 
-int init_all_pipes(void);
-void close_unused_pipe_ends(int process_role);
-int send_pipe_command(int pipe_id, int command);
-int read_pipe_command(int pipe_id, int *command);
-int send_pipe_string(int pipe_id, const char *str);
-int read_pipe_string(int pipe_id, char *buffer, size_t size);
-int destroy_all_pipes(void);
-int notify_manager_from_signal(int signal_number);
-int get_pipe_read_end(int pipe_id);
-int get_pipe_write_end(int pipe_id);
+// Cleanup: close file descriptors and remove named pipe
+int cleanup_pipes(void);
+
+// Signal self-pipe: used by signal handlers to notify main loop
+int notify_signal(int signal_number);
+int get_signal_read_fd(void);
+
+// Input pipe: reading commands from the named pipe
+int get_input_pipe_fd(void);
+int read_input_line(char *buffer, size_t size);
 
 
 #endif

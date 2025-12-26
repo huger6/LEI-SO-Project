@@ -50,13 +50,13 @@ ipc_clean:
 # --- Tests ---
 
 # Memory leaks
-check_memory: $(EXEC)
+mem: $(EXEC)
 	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --log-file=valgrind/valgrind_mem.log ./$(EXEC)
 
 # Race conditions
-check_threads: $(EXEC)
+helgrind: $(EXEC)
 	valgrind --tool=helgrind --log-file=valgrind/valgrind_helgrind.log ./$(EXEC)
 
 # Deadlocks
-check_deadlock: $(EXEC)
+drd: $(EXEC)
 	valgrind --tool=drd --log-file=valgrind/valgrind_drd.log ./$(EXEC)

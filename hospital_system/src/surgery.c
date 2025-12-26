@@ -33,6 +33,13 @@
 
 #define MAX_CONCURRENT_SURGERIES 10
 
+// Maximum time (in simulation units) a patient can wait on hold for dependencies
+// If exceeded, surgery is cancelled
+#define MAX_WAIT_DEPENDENCIES_TIME 2000
+
+// Initial timeout (in simulation units) before putting patient on hold
+#define INITIAL_DEPENDENCY_TIMEOUT 150
+
 // --- Active Surgery Control Structure ---
 // Each worker thread gets one of these for synchronization with the dispatcher
 typedef struct ActiveSurgery {
@@ -65,11 +72,41 @@ typedef struct ActiveSurgery {
     struct ActiveSurgery *next;
 } active_surgery_t;
 
+// --- Pending Surgery Structure ---
+// Surgeries waiting on hold for dependencies (worker freed)
+typedef struct PendingSurgery {
+    int surgery_id;
+    char patient_id[20];
+    int surgery_type;
+    int urgency;
+    int scheduled_time;
+    int estimated_duration;
+    int tests_count;
+    int tests_id[5];
+    int meds_count;
+    int meds_id[5];
+    
+    // Dependency status
+    int tests_done;
+    int meds_ok;
+    int needs_tests;
+    int needs_meds;
+    
+    // Time tracking for max hold time
+    int hold_start_time;    // Simulation time when put on hold
+    
+    struct PendingSurgery *next;
+} pending_surgery_t;
+
 // --- Globals ---
 
 // Active surgeries registry (linked list)
 static active_surgery_t *active_surgeries_head = NULL;
 static pthread_mutex_t registry_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Pending surgeries list (on hold waiting for dependencies)
+static pending_surgery_t *pending_surgeries_head = NULL;
+static pthread_mutex_t pending_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Condition variable for medical teams
 static pthread_cond_t teams_available_cond = PTHREAD_COND_INITIALIZER;
@@ -180,6 +217,96 @@ static active_surgery_t* find_surgery_by_id(int surgery_id) {
     return NULL;
 }
 
+// --- Pending Surgery Management ---
+
+static void add_to_pending(active_surgery_t *surgery) {
+    pending_surgery_t *pending = malloc(sizeof(pending_surgery_t));
+    if (!pending) {
+        log_event(ERROR, "SURGERY", "MALLOC_FAIL", "Failed to allocate pending surgery");
+        return;
+    }
+    
+    // Copy data from active surgery to pending
+    pending->surgery_id = surgery->surgery_id;
+    strncpy(pending->patient_id, surgery->patient_id, sizeof(pending->patient_id) - 1);
+    pending->surgery_type = surgery->surgery_type;
+    pending->urgency = surgery->urgency;
+    pending->scheduled_time = surgery->scheduled_time;
+    pending->estimated_duration = surgery->estimated_duration;
+    pending->tests_count = surgery->tests_count;
+    memcpy(pending->tests_id, surgery->tests_id, sizeof(pending->tests_id));
+    pending->meds_count = surgery->meds_count;
+    memcpy(pending->meds_id, surgery->meds_id, sizeof(pending->meds_id));
+    
+    // Copy dependency status
+    pending->tests_done = surgery->tests_done;
+    pending->meds_ok = surgery->meds_ok;
+    pending->needs_tests = surgery->needs_tests;
+    pending->needs_meds = surgery->needs_meds;
+    
+    // Track when put on hold
+    pending->hold_start_time = get_simulation_time();
+    pending->next = NULL;
+    
+    safe_pthread_mutex_lock(&pending_mutex);
+    pending->next = pending_surgeries_head;
+    pending_surgeries_head = pending;
+    safe_pthread_mutex_unlock(&pending_mutex);
+    
+    char log_msg[150];
+    snprintf(log_msg, sizeof(log_msg), "Surgery %d for %s put on hold (tests_done=%d, meds_ok=%d)",
+             pending->surgery_id, pending->patient_id, pending->tests_done, pending->meds_ok);
+    log_event(INFO, "SURGERY", "ON_HOLD", log_msg);
+}
+
+static pending_surgery_t* find_pending_by_id(int surgery_id) {
+    // Caller must hold pending_mutex
+    pending_surgery_t *curr = pending_surgeries_head;
+    while (curr) {
+        if (curr->surgery_id == surgery_id) {
+            return curr;
+        }
+        curr = curr->next;
+    }
+    return NULL;
+}
+
+// Forward declaration for respawning from pending
+static void spawn_surgery_from_pending(pending_surgery_t *pending);
+
+// Check and remove expired pending surgeries
+static void check_pending_timeouts(void) {
+    int current_time = get_simulation_time();
+    
+    safe_pthread_mutex_lock(&pending_mutex);
+    
+    pending_surgery_t **curr = &pending_surgeries_head;
+    while (*curr) {
+        int wait_time = current_time - (*curr)->hold_start_time;
+        if (wait_time >= MAX_WAIT_DEPENDENCIES_TIME) {
+            pending_surgery_t *expired = *curr;
+            *curr = expired->next;
+            
+            char log_msg[150];
+            snprintf(log_msg, sizeof(log_msg), 
+                     "Surgery %d for %s cancelled (exceeded max hold time of %d)",
+                     expired->surgery_id, expired->patient_id, MAX_WAIT_DEPENDENCIES_TIME);
+            log_event(WARNING, "SURGERY", "HOLD_TIMEOUT", log_msg);
+            
+            // Update cancelled surgeries stat
+            safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
+            shm_hospital->shm_stats->cancelled_surgeries++;
+            safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
+            
+            free(expired);
+        } else {
+            curr = &(*curr)->next;
+        }
+    }
+    
+    safe_pthread_mutex_unlock(&pending_mutex);
+}
+
 // --- Async Request Senders (Non-blocking) ---
 
 // Maximum tests that msg_lab_request_t can hold
@@ -198,7 +325,7 @@ static int send_lab_request_async(active_surgery_t *surgery) {
     msg_lab_request_t req;
     memset(&req, 0, sizeof(msg_lab_request_t));
     
-    req.hdr.mtype = PRIORITY_NORMAL;
+    req.hdr.mtype = PRIORITY_URGENT; // Surgery is more important
     req.hdr.kind = MSG_LAB_REQUEST;
     strncpy(req.hdr.patient_id, surgery->patient_id, sizeof(req.hdr.patient_id) - 1);
     req.hdr.operation_id = surgery->surgery_id;
@@ -238,9 +365,6 @@ static int send_lab_request_async(active_surgery_t *surgery) {
 // Maximum meds in active_surgery_t source structure
 #define MAX_MEDS_IN_SURGERY 5
 
-// Timeout for waiting on Lab/Pharmacy responses (in simulation time units)
-#define DEPENDENCY_TIMEOUT_UNITS 50
-
 static int send_pharmacy_request_async(active_surgery_t *surgery) {
     if (surgery->meds_count <= 0) {
         surgery->needs_meds = 0;
@@ -254,7 +378,7 @@ static int send_pharmacy_request_async(active_surgery_t *surgery) {
     msg_pharmacy_request_t req;
     memset(&req, 0, sizeof(msg_pharmacy_request_t));
     
-    req.hdr.mtype = MSG_PHARMACY_REQUEST;
+    req.hdr.mtype = PRIORITY_URGENT; // Surgery is more important
     req.hdr.kind = MSG_PHARMACY_REQUEST;
     strncpy(req.hdr.patient_id, surgery->patient_id, sizeof(req.hdr.patient_id) - 1);
     req.hdr.operation_id = surgery->surgery_id;
@@ -290,6 +414,7 @@ static int send_pharmacy_request_async(active_surgery_t *surgery) {
 }
 
 // --- Wait for Dependencies (Worker waits on its own cond var with timeout) ---
+// Returns: 0 = dependencies ready, 1 = timeout (put on hold), -1 = error/shutdown
 
 static int wait_for_dependencies(active_surgery_t *surgery) {
     struct timespec timeout;
@@ -309,14 +434,13 @@ static int wait_for_dependencies(active_surgery_t *surgery) {
         }
         
         // Calculate absolute timeout based on simulation time units
-        // total_ms = DEPENDENCY_TIMEOUT_UNITS * config->time_unit_ms
         if (clock_gettime(CLOCK_REALTIME, &timeout) != 0) {
             log_event(ERROR, "SURGERY", "CLOCK_FAIL", "clock_gettime failed");
             safe_pthread_mutex_unlock(&surgery->mutex);
             return -1;
         }
         
-        long total_ms = (long)DEPENDENCY_TIMEOUT_UNITS * config->time_unit_ms;
+        long total_ms = (long)INITIAL_DEPENDENCY_TIMEOUT * config->time_unit_ms;
         long add_sec = total_ms / 1000;
         long add_nsec = (total_ms % 1000) * 1000000L;
         
@@ -343,15 +467,15 @@ static int wait_for_dependencies(active_surgery_t *surgery) {
                 return 0;
             }
             
-            // Genuine timeout - log which dependency is missing
-            char err_msg[150];
-            snprintf(err_msg, sizeof(err_msg), 
-                     "TIMEOUT waiting for Lab/Pharmacy response for %s (tests_done=%d, meds_ok=%d)",
+            // Timeout - patient will be put on hold
+            char log_msg[150];
+            snprintf(log_msg, sizeof(log_msg), 
+                     "Initial timeout for %s, putting on hold (tests_done=%d, meds_ok=%d)",
                      surgery->patient_id, surgery->tests_done, surgery->meds_ok);
-            log_event(ERROR, "SURGERY", "TIMEOUT", err_msg);
+            log_event(INFO, "SURGERY", "TIMEOUT_HOLD", log_msg);
             
             safe_pthread_mutex_unlock(&surgery->mutex);
-            return -1; // Timeout failure
+            return 1; // Put on hold
         } else if (rc != 0 && rc != EINTR) {
             // Unexpected error
             char err_msg[100];
@@ -571,7 +695,12 @@ static void *surgery_worker(void *arg) {
     // Step 3: Wait for Dependencies
     // ==========================================
     
-    if (wait_for_dependencies(surgery) != 0) {
+    int dep_result = wait_for_dependencies(surgery);
+    if (dep_result == 1) {
+        // Put on hold - add to pending list and free worker
+        add_to_pending(surgery);
+        goto put_on_hold;
+    } else if (dep_result != 0) {
         goto surgery_cancelled;
     }
     
@@ -581,7 +710,17 @@ static void *surgery_worker(void *arg) {
     // Step 4: Wait for Scheduled Time
     // ==========================================
     
+    int time_before_wait = get_simulation_time();
     wait_for_scheduled_time(surgery);
+    int time_after_wait = get_simulation_time();
+    
+    // Update surgery wait time statistics (time spent waiting after dependencies ready)
+    int actual_wait_time = time_after_wait - time_before_wait;
+    if (actual_wait_time > 0) {
+        safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
+        shm_hospital->shm_stats->total_surgery_wait_time += (double)actual_wait_time;
+        safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
+    }
     
     if (check_shutdown()) goto surgery_cancelled;
     
@@ -640,6 +779,16 @@ surgery_cancelled:
     
     snprintf(log_msg, sizeof(log_msg), "Surgery cancelled for %s", surgery->patient_id);
     log_event(WARNING, "SURGERY", "SURGERY_CANCELLED", log_msg);
+    goto cleanup;
+
+put_on_hold:
+    // Worker exits but surgery data is preserved in pending list
+    // No statistics update here - will be updated when respawned or expired
+    unregister_surgery(surgery);
+    safe_pthread_mutex_destroy(&surgery->mutex);
+    safe_pthread_cond_destroy(&surgery->cond);
+    free(surgery);
+    return NULL;
 
 cleanup:
     // Mark as inactive
@@ -661,6 +810,7 @@ cleanup:
 // --- Dispatcher: Handle Lab Results Response ---
 
 static void handle_lab_response(int surgery_id) {
+    // First check active surgeries
     safe_pthread_mutex_lock(&registry_mutex);
     
     active_surgery_t *surgery = find_surgery_by_id(surgery_id);
@@ -675,18 +825,54 @@ static void handle_lab_response(int surgery_id) {
         
         safe_pthread_cond_signal(&surgery->cond);
         safe_pthread_mutex_unlock(&surgery->mutex);
+        safe_pthread_mutex_unlock(&registry_mutex);
+        return;
+    }
+    safe_pthread_mutex_unlock(&registry_mutex);
+    
+    // Check pending surgeries
+    safe_pthread_mutex_lock(&pending_mutex);
+    pending_surgery_t *pending = find_pending_by_id(surgery_id);
+    if (pending) {
+        pending->tests_done = 1;
+        
+        char log_msg[100];
+        snprintf(log_msg, sizeof(log_msg), "Lab results received for pending surgery %d (%s)", 
+                 surgery_id, pending->patient_id);
+        log_event(INFO, "SURGERY", "LAB_RESPONSE_PENDING", log_msg);
+        
+        // Check if all dependencies are now satisfied
+        int tests_satisfied = !pending->needs_tests || pending->tests_done;
+        int meds_satisfied = !pending->needs_meds || pending->meds_ok;
+        
+        if (tests_satisfied && meds_satisfied) {
+            // Remove from pending and respawn
+            pending_surgery_t **curr = &pending_surgeries_head;
+            while (*curr) {
+                if (*curr == pending) {
+                    *curr = pending->next;
+                    break;
+                }
+                curr = &(*curr)->next;
+            }
+            safe_pthread_mutex_unlock(&pending_mutex);
+            
+            log_event(INFO, "SURGERY", "RESPAWN", pending->patient_id);
+            spawn_surgery_from_pending(pending);
+            return;
+        }
     } else {
         char log_msg[100];
         snprintf(log_msg, sizeof(log_msg), "Lab response for unknown surgery %d", surgery_id);
         log_event(WARNING, "SURGERY", "ORPHAN_RESPONSE", log_msg);
     }
-    
-    safe_pthread_mutex_unlock(&registry_mutex);
+    safe_pthread_mutex_unlock(&pending_mutex);
 }
 
 // --- Dispatcher: Handle Pharmacy Response ---
 
 static void handle_pharmacy_response(int surgery_id) {
+    // First check active surgeries
     safe_pthread_mutex_lock(&registry_mutex);
     
     active_surgery_t *surgery = find_surgery_by_id(surgery_id);
@@ -701,13 +887,48 @@ static void handle_pharmacy_response(int surgery_id) {
         
         safe_pthread_cond_signal(&surgery->cond);
         safe_pthread_mutex_unlock(&surgery->mutex);
+        safe_pthread_mutex_unlock(&registry_mutex);
+        return;
+    }
+    safe_pthread_mutex_unlock(&registry_mutex);
+    
+    // Check pending surgeries
+    safe_pthread_mutex_lock(&pending_mutex);
+    pending_surgery_t *pending = find_pending_by_id(surgery_id);
+    if (pending) {
+        pending->meds_ok = 1;
+        
+        char log_msg[100];
+        snprintf(log_msg, sizeof(log_msg), "Pharmacy confirmation for pending surgery %d (%s)", 
+                 surgery_id, pending->patient_id);
+        log_event(INFO, "SURGERY", "PHARM_RESPONSE_PENDING", log_msg);
+        
+        // Check if all dependencies are now satisfied
+        int tests_satisfied = !pending->needs_tests || pending->tests_done;
+        int meds_satisfied = !pending->needs_meds || pending->meds_ok;
+        
+        if (tests_satisfied && meds_satisfied) {
+            // Remove from pending and respawn
+            pending_surgery_t **curr = &pending_surgeries_head;
+            while (*curr) {
+                if (*curr == pending) {
+                    *curr = pending->next;
+                    break;
+                }
+                curr = &(*curr)->next;
+            }
+            safe_pthread_mutex_unlock(&pending_mutex);
+            
+            log_event(INFO, "SURGERY", "RESPAWN", pending->patient_id);
+            spawn_surgery_from_pending(pending);
+            return;
+        }
     } else {
         char log_msg[100];
         snprintf(log_msg, sizeof(log_msg), "Pharmacy response for unknown surgery %d", surgery_id);
         log_event(WARNING, "SURGERY", "ORPHAN_RESPONSE", log_msg);
     }
-    
-    safe_pthread_mutex_unlock(&registry_mutex);
+    safe_pthread_mutex_unlock(&pending_mutex);
 }
 
 // --- Dispatcher: Broadcast Shutdown to All Workers ---
@@ -791,6 +1012,157 @@ static void spawn_surgery_worker(msg_new_surgery_t *msg) {
     safe_pthread_detach(surgery->thread);
 }
 
+// --- Surgery Worker Thread for Resumed Surgeries (from pending) ---
+// This worker skips dependency requests since they were already handled
+
+static void *surgery_worker_resumed(void *arg) {
+    active_surgery_t *surgery = (active_surgery_t *)arg;
+    
+    char log_msg[150];
+    snprintf(log_msg, sizeof(log_msg), "Resumed surgery thread for %s (deps already satisfied)", 
+             surgery->patient_id);
+    log_event(INFO, "SURGERY", "THREAD_RESUMED", log_msg);
+    
+    // Dependencies are already satisfied, proceed directly to scheduled time wait
+    
+    if (check_shutdown()) goto surgery_cancelled;
+    
+    // ==========================================
+    // Step 4: Wait for Scheduled Time
+    // ==========================================
+    
+    int time_before_wait = get_simulation_time();
+    wait_for_scheduled_time(surgery);
+    int time_after_wait = get_simulation_time();
+    
+    // Update surgery wait time statistics
+    int actual_wait_time = time_after_wait - time_before_wait;
+    if (actual_wait_time > 0) {
+        safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
+        shm_hospital->shm_stats->total_surgery_wait_time += (double)actual_wait_time;
+        safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
+    }
+    
+    if (check_shutdown()) goto surgery_cancelled;
+    
+    // ==========================================
+    // Step 5: Resource Acquisition
+    // ==========================================
+    
+    if (acquire_room(surgery) != 0) {
+        goto surgery_cancelled;
+    }
+    
+    if (acquire_medical_team(surgery) != 0) {
+        release_room(surgery);
+        goto surgery_cancelled;
+    }
+    
+    if (check_shutdown()) {
+        release_medical_team(surgery);
+        release_room(surgery);
+        goto surgery_cancelled;
+    }
+    
+    // ==========================================
+    // Step 6: Execution
+    // ==========================================
+    
+    perform_surgery(surgery);
+    release_medical_team(surgery);
+    cleanup_room(surgery);
+    release_room(surgery);
+    
+    safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
+    shm_hospital->shm_stats->completed_surgeries++;
+    shm_hospital->shm_stats->total_operations++;
+    safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
+    
+    snprintf(log_msg, sizeof(log_msg), "Resumed surgery workflow complete for %s", surgery->patient_id);
+    log_event(INFO, "SURGERY", "WORKFLOW_COMPLETE", log_msg);
+    
+    goto cleanup;
+
+surgery_cancelled:
+    safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
+    shm_hospital->shm_stats->cancelled_surgeries++;
+    safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
+    
+    snprintf(log_msg, sizeof(log_msg), "Resumed surgery cancelled for %s", surgery->patient_id);
+    log_event(WARNING, "SURGERY", "SURGERY_CANCELLED", log_msg);
+
+cleanup:
+    safe_pthread_mutex_lock(&surgery->mutex);
+    surgery->active = 0;
+    safe_pthread_mutex_unlock(&surgery->mutex);
+    
+    unregister_surgery(surgery);
+    safe_pthread_mutex_destroy(&surgery->mutex);
+    safe_pthread_cond_destroy(&surgery->cond);
+    free(surgery);
+    return NULL;
+}
+
+// --- Spawn Surgery from Pending (dependencies already satisfied) ---
+
+static void spawn_surgery_from_pending(pending_surgery_t *pending) {
+    active_surgery_t *surgery = malloc(sizeof(active_surgery_t));
+    if (!surgery) {
+        log_event(ERROR, "SURGERY", "MALLOC_FAIL", "Failed to allocate surgery control structure");
+        free(pending);
+        return;
+    }
+    
+    // Initialize control structure from pending data
+    memset(surgery, 0, sizeof(active_surgery_t));
+    
+    surgery->surgery_id = pending->surgery_id;
+    strncpy(surgery->patient_id, pending->patient_id, sizeof(surgery->patient_id) - 1);
+    surgery->surgery_type = pending->surgery_type;
+    surgery->urgency = pending->urgency;
+    surgery->scheduled_time = pending->scheduled_time;
+    surgery->estimated_duration = pending->estimated_duration;
+    surgery->tests_count = pending->tests_count;
+    memcpy(surgery->tests_id, pending->tests_id, sizeof(surgery->tests_id));
+    surgery->meds_count = pending->meds_count;
+    memcpy(surgery->meds_id, pending->meds_id, sizeof(surgery->meds_id));
+    
+    // Initialize synchronization primitives
+    safe_pthread_mutex_init(&surgery->mutex, NULL);
+    safe_pthread_cond_init(&surgery->cond, NULL);
+    
+    // Dependencies are already satisfied
+    surgery->tests_done = 1;
+    surgery->meds_ok = 1;
+    surgery->needs_tests = pending->needs_tests;
+    surgery->needs_meds = pending->needs_meds;
+    surgery->active = 1;
+    surgery->next = NULL;
+    
+    // Free pending structure
+    free(pending);
+    
+    // Register in active surgeries list
+    register_surgery(surgery);
+    
+    char log_msg[150];
+    snprintf(log_msg, sizeof(log_msg), "Respawning surgery: %s (type: %s, from pending)", 
+             surgery->patient_id, get_room_name(surgery->surgery_type));
+    log_event(INFO, "SURGERY", "RESPAWN_START", log_msg);
+    
+    // Spawn resumed worker thread
+    if (safe_pthread_create(&surgery->thread, NULL, surgery_worker_resumed, surgery) != 0) {
+        log_event(ERROR, "SURGERY", "THREAD_FAIL", "Failed to create resumed surgery worker thread");
+        unregister_surgery(surgery);
+        safe_pthread_mutex_destroy(&surgery->mutex);
+        safe_pthread_cond_destroy(&surgery->cond);
+        free(surgery);
+        return;
+    }
+    
+    safe_pthread_detach(surgery->thread);
+}
+
 // --- Dispatcher Main Loop ---
 // The ONLY thread that performs msgrcv
 
@@ -842,6 +1214,9 @@ static void dispatcher_loop(void) {
                 }
                 break;
         }
+        
+        // Check for expired pending surgeries after each message
+        check_pending_timeouts();
     }
     
     // Shutdown triggered externally
@@ -851,12 +1226,7 @@ static void dispatcher_loop(void) {
 // --- Main Surgery Process ---
 
 void surgery_main(void) {
-    log_event(INFO, "SURGERY", "STARTUP", "surgery process initialized");
-
     setup_child_signals();
-
-    close_unused_pipe_ends(ROLE_SURGERY);
-    
     
     // Seed random number generator
     srand(time(NULL) ^ getpid());
@@ -870,7 +1240,7 @@ void surgery_main(void) {
     // Wait briefly for detached worker threads to complete
     wait_time_units(10);
     
-    // Cleanup any remaining surgeries (shouldn't happen if workers exit cleanly)
+    // Cleanup any remaining active surgeries
     safe_pthread_mutex_lock(&registry_mutex);
     while (active_surgeries_head) {
         active_surgery_t *next = active_surgeries_head->next;
@@ -881,13 +1251,17 @@ void surgery_main(void) {
     }
     safe_pthread_mutex_unlock(&registry_mutex);
     
+    // Cleanup any remaining pending surgeries
+    safe_pthread_mutex_lock(&pending_mutex);
+    while (pending_surgeries_head) {
+        pending_surgery_t *next = pending_surgeries_head->next;
+        free(pending_surgeries_head);
+        pending_surgeries_head = next;
+    }
+    safe_pthread_mutex_unlock(&pending_mutex);
+    
     // Process resources cleanup
     safe_pthread_cond_destroy(&teams_available_cond);
-    
-    log_event(INFO, "SURGERY", "SHUTDOWN", "Surgery process shutting down");
-
-    // Resources cleanup
-    log_event(INFO, "SURGERY", "RESOURCES_CLEANUP", "Cleaning surgery resources");
     child_cleanup();
 
     exit(EXIT_SUCCESS);

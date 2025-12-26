@@ -1,13 +1,9 @@
 #include <ctype.h>
 #include <string.h>
-#include <errno.h>
-#include <unistd.h>
-#include "../include/console_input.h"
+#include <stdlib.h>
 
-#include "../include/pipes.h"
-#include "../include/log.h"
+#include "../include/console_input.h"
 #include "../include/config.h"
-#include "../include/manager_utils.h"
 
 
 // Helper to trim leading/trailing whitespace
@@ -19,64 +15,6 @@ static char* trim_whitespace(char* str) {
     while(end > str && isspace((unsigned char)*end)) end--;
     *(end+1) = 0;
     return str;
-}
-
-void process_console_input(void) {
-    // Close all read ends
-    for(int i = 0; i < 6; i++) close(get_pipe_read_end(i));
-    // Close all write ends except INPUT
-    for(int i = 0; i < 6; i++) {
-        if (i != PIPE_INPUT) close(get_pipe_write_end(i));
-    }
-
-    char buffer[256];
-
-    // Setup signal handlers for child process (no SA_RESTART)
-    setup_child_signals();
-
-    // Log start of input loop
-    log_event(INFO, "INPUT", "START", "Console input listener started");
-
-    // Continuous loop reading from stdin
-    while (!g_stop_child) {
-        if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
-            if (errno == EINTR) continue; // Interrupted by signal, check g_stop_child
-            break; // EOF or error
-        }
-        
-        // Remove trailing newline character replaced by null terminator
-        buffer[strcspn(buffer, "\n")] = 0;
-
-        // Skip empty lines
-        if (strlen(buffer) == 0) {
-            continue;
-        }
-
-        // Reset command code for new iteration
-        // command_code = -1;
-
-        // ---------------------------------------------------------
-        // Command Transmission
-        // Sends raw command string to Manager via PIPE_INPUT
-        // ---------------------------------------------------------
-
-        if (send_pipe_string(PIPE_INPUT, buffer) == -1) {
-            log_event(ERROR, "INPUT", "SEND_FAIL", "Failed to send command to Manager via pipe");
-        } else {
-            #ifdef DEBUG
-                snprintf(log_msg, sizeof(log_msg), "Sent command '%s' to Manager", buffer);
-                log_event(DEBUG, "INPUT", "SENT", log_msg);
-            #endif
-        }
-    }
-    
-    log_event(INFO, "INPUT", "STOP", "Console input listener shutting down");
-
-    // Resources cleanup
-    log_event(INFO, "CONSOLE_INPUT", "RESOURCES_CLEANUP", "Cleaning console input receiver resources");
-    child_cleanup();
-
-    exit(EXIT_SUCCESS);
 }
 
 int get_med_id(const char *name) {

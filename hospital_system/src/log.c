@@ -25,7 +25,7 @@ const char* get_severity_str(log_severity_t severity) {
         case ERROR:    return "ERROR";
         case WARNING:  return "WARNING";
         case INFO:     return "INFO";
-        case DEBUG:    return "DEBUG";
+        case DEBUG_LOG:    return "DEBUG_LOG";
         default:       return "UNKNOWN";
     }
 }

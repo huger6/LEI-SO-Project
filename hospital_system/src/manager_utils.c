@@ -43,7 +43,7 @@ void set_shutdown() {
 
 // Generic handler that writes to the self-pipe
 static void generic_signal_handler(int sig) {
-    notify_manager_from_signal(sig);
+    notify_signal(sig);
 }
 
 // Handler for child processes (no SA_RESTART)
@@ -67,8 +67,6 @@ void setup_signal_handlers(void) {
     sigaction(SIGUSR1, &sa, NULL);
     sigaction(SIGUSR2, &sa, NULL);
     sigaction(SIGCHLD, &sa, NULL);
-
-    log_event(INFO, "SYSTEM", "SIGNALS", "Signal handlers setup initialized successfully");
 }
 
 // Setup signal handlers for child processes
@@ -170,6 +168,10 @@ void print_lab_format(void) {
     printf("  <lab_id>: LAB followed by digits (e.g., LAB001)\n");
     printf("  <priority>: URGENT | NORMAL\n");
     printf("  <lab>: LAB1 | LAB2 | BOTH\n");
+    printf("  Tests per lab:\n");
+    printf("    LAB1: HEMO, GLIC\n");
+    printf("    LAB2: COLEST, RENAL, HEPAT\n");
+    printf("    BOTH: any test (PREOP requires BOTH)\n");
 }
 
 void print_restock_format(void) {
@@ -186,43 +188,25 @@ void child_cleanup() {
 
 // Cleanup all resources for the manager
 void manager_cleanup() {
-    log_event(INFO, "SYSTEM", "SHUTDOWN", "Initiating system shutdown");
-    
     // Kill children if needed
-
-    if (pid_console_input > 0) {
-        if (kill(pid_console_input, SIGTERM) == 0) {
-            waitpid(pid_console_input, NULL, 0);
-        } else if (errno != ESRCH) {
-            log_event(ERROR, "MANAGER", "PROCESS_KILL", "Kill console input process command failed");
-        }
-    }
     if (pid_triage > 0) {
         if (kill(pid_triage, SIGTERM) == 0) {
             waitpid(pid_triage, NULL, 0);
-        } else if (errno != ESRCH) {
-            log_event(ERROR, "MANAGER", "PROCESS_KILL", "Kill triage process command failed");
         }
     }
     if (pid_surgery > 0) {
         if (kill(pid_surgery, SIGTERM) == 0) {
             waitpid(pid_surgery, NULL, 0);
-        } else if (errno != ESRCH) {
-            log_event(ERROR, "MANAGER", "PROCESS_KILL", "Kill surgery process command failed");
         }
     }
     if (pid_pharmacy > 0) {
         if (kill(pid_pharmacy, SIGTERM) == 0) {
             waitpid(pid_pharmacy, NULL, 0);
-        } else if (errno != ESRCH) {
-            log_event(ERROR, "MANAGER", "PROCESS_KILL", "Kill pharmacy process command failed");
         }
     }
     if (pid_lab > 0) {
         if (kill(pid_lab, SIGTERM) == 0) {
             waitpid(pid_lab, NULL, 0);
-        } else if (errno != ESRCH) {
-            log_event(ERROR, "MANAGER", "PROCESS_KILL", "Kill laboratory process command failed");
         }
     }
 
@@ -232,40 +216,28 @@ void manager_cleanup() {
     cleanup_scheduler();
     cleanup_all_shm();
     remove_all_message_queues();
-    destroy_all_pipes();
+    cleanup_pipes();
     close_all_semaphores();
     unlink_all_semaphores();
     cleanup_config();
 
-    log_event(INFO, "SYSTEM", "SHUTDOWN", "Shutdown was successful. Goodbye");
+    log_event(INFO, "SYSTEM", "SHUTDOWN", "System shutdown complete");
 
     close_logging();
 }
 
 void poison_pill_triage() {
-    // We only send to one thread
-    // The others are taken care of inside the process
     msg_new_emergency_t poison_pill;
     memset(&poison_pill, 0, sizeof(msg_new_emergency_t));
     poison_pill.hdr.mtype = MSG_NEW_EMERGENCY;
     poison_pill.hdr.kind = MSG_SHUTDOWN;
-    if (send_generic_message(mq_triage_id, &poison_pill, sizeof(msg_new_emergency_t)) == 0) {
-        log_event(INFO, "SHUTDOWN", "BROADCAST", "SHUTDOWN message sent to triage");
-    } else {
-        log_event(ERROR, "SHUTDOWN", "BROADCAST", "Failed to broadcast SHUTDOWN message to triage");
-    }
+    send_generic_message(mq_triage_id, &poison_pill, sizeof(msg_new_emergency_t));
 }
 
 void poison_pill_surgery() {
-    // We only send to one thread
-    // The others are taken care of inside the process
     msg_new_surgery_t poison_pill;
     memset(&poison_pill, 0, sizeof(msg_new_surgery_t));
     poison_pill.hdr.mtype = MSG_NEW_SURGERY;
     poison_pill.hdr.kind = MSG_SHUTDOWN;
-    if (send_generic_message(mq_triage_id, &poison_pill, sizeof(msg_new_surgery_t)) == 0) {
-        log_event(INFO, "SHUTDOWN", "BROADCAST", "SHUTDOWN message sent to triage");
-    } else {
-        log_event(ERROR, "SHUTDOWN", "BROADCAST", "Failed to broadcast SHUTDOWN message to triage");
-    }
+    send_generic_message(mq_triage_id, &poison_pill, sizeof(msg_new_surgery_t));
 }

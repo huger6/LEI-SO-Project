@@ -220,7 +220,7 @@ void save_statistics_snapshot(global_statistics_shm_t *stats) {
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
     char filename[256];
-    snprintf(filename, sizeof(filename), "results/stats_snapshot_%04d%02d%02d_%02d%02d%02d.txt",
+    snprintf(filename, sizeof(filename), "results/stats_snapshots/stats_snapshot_%04d%02d%02d_%02d%02d%02d.txt",
              t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
              t->tm_hour, t->tm_min, t->tm_sec);
 
