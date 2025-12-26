@@ -38,5 +38,7 @@ void manager_cleanup();
 
 void poison_pill_triage();
 void poison_pill_surgery();
+void poison_pill_pharmacy();
+void poison_pill_lab();
 
 #endif

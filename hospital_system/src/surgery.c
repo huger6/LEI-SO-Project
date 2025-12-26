@@ -292,6 +292,18 @@ static void check_pending_timeouts(void) {
                      "Surgery %d for %s cancelled (exceeded max hold time of %d)",
                      expired->surgery_id, expired->patient_id, MAX_WAIT_DEPENDENCIES_TIME);
             log_event(WARNING, "SURGERY", "HOLD_TIMEOUT", log_msg);
+                        
+            #ifdef DEBUG
+                {
+                    char debug_msg[120];
+                    snprintf(debug_msg, sizeof(debug_msg), 
+                            "SURGERY_TIMEOUT: %s (meds: %d/%d; tests: %d/%d)", 
+                            expired->patient_id, 
+                            expired->meds_ok, expired->needs_meds,
+                            expired->tests_done, expired->needs_tests);
+                    log_event(DEBUG_LOG, "SURGERY", "TIMEOUT_STATUS", debug_msg);
+                }
+            #endif
             
             // Update cancelled surgeries stat
             safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
@@ -779,6 +791,19 @@ surgery_cancelled:
     
     snprintf(log_msg, sizeof(log_msg), "Surgery cancelled for %s", surgery->patient_id);
     log_event(WARNING, "SURGERY", "SURGERY_CANCELLED", log_msg);
+    
+#ifdef DEBUG
+    {
+        char debug_msg[120];
+        snprintf(debug_msg, sizeof(debug_msg), 
+                 "SURGERY_CANCELLED: %s (meds: %d/%d; tests: %d/%d)", 
+                 surgery->patient_id, 
+                 surgery->meds_ok, surgery->needs_meds,
+                 surgery->tests_done, surgery->needs_tests);
+        log_event(DEBUG_LOG, "SURGERY", "CANCELLED_STATUS", debug_msg);
+    }
+#endif
+    
     goto cleanup;
 
 put_on_hold:
@@ -1226,6 +1251,10 @@ static void dispatcher_loop(void) {
 // --- Main Surgery Process ---
 
 void surgery_main(void) {
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SURGERY", "PROCESS_START", "Surgery process main started");
+    #endif
+    
     setup_child_signals();
     
     // Seed random number generator
@@ -1234,12 +1263,21 @@ void surgery_main(void) {
     // Initialize global condition variable for medical teams
     safe_pthread_cond_init(&teams_available_cond, NULL);
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SURGERY", "DISPATCHER_START", "Starting dispatcher loop");
+    #endif
     // Run dispatcher loop (this is the main thread)
     dispatcher_loop();
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SURGERY", "WAIT_WORKERS", "Waiting for detached worker threads to complete");
+    #endif
     // Wait briefly for detached worker threads to complete
     wait_time_units(10);
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SURGERY", "CLEANUP_ACTIVE", "Cleaning up remaining active surgeries");
+    #endif
     // Cleanup any remaining active surgeries
     safe_pthread_mutex_lock(&registry_mutex);
     while (active_surgeries_head) {
@@ -1251,6 +1289,9 @@ void surgery_main(void) {
     }
     safe_pthread_mutex_unlock(&registry_mutex);
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SURGERY", "CLEANUP_PENDING", "Cleaning up remaining pending surgeries");
+    #endif
     // Cleanup any remaining pending surgeries
     safe_pthread_mutex_lock(&pending_mutex);
     while (pending_surgeries_head) {
@@ -1260,9 +1301,19 @@ void surgery_main(void) {
     }
     safe_pthread_mutex_unlock(&pending_mutex);
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SURGERY", "CLEANUP_RESOURCES", "Cleaning up process resources");
+    #endif
     // Process resources cleanup
     safe_pthread_cond_destroy(&teams_available_cond);
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SURGERY", "CHILD_CLEANUP", "Calling child_cleanup");
+    #endif
     child_cleanup();
 
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SURGERY", "PROCESS_EXIT", "Surgery process exiting");
+    #endif
     exit(EXIT_SUCCESS);
 }

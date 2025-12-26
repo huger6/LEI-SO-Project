@@ -223,9 +223,25 @@ void child_cleanup() {
         snprintf(dbg, sizeof(dbg), "Child cleanup starting: pid=%d", (int)getpid());
         log_event(DEBUG_LOG, "SYSTEM", "CHILD_CLEANUP", dbg);
     #endif
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SYSTEM", "CHILD_CLEANUP_STEP", "Cleaning up child SHM");
+    #endif
     cleanup_child_shm();
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SYSTEM", "CHILD_CLEANUP_STEP", "Closing all semaphores");
+    #endif
     close_all_semaphores();
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SYSTEM", "CHILD_CLEANUP_STEP", "Cleaning up config");
+    #endif
     cleanup_config();
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SYSTEM", "CHILD_CLEANUP_STEP", "Closing logging");
+    #endif
     close_logging();
 }
 
@@ -238,15 +254,24 @@ void manager_cleanup() {
         log_event(DEBUG_LOG, "SYSTEM", "MANAGER_CLEANUP", dbg);
     #endif
 
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SYSTEM", "TERMINATE_CHILDREN", "Starting to terminate child processes");
+    #endif
     // Kill children if needed
     terminate_child_process("TRIAGE", &pid_triage);
     terminate_child_process("SURGERY", &pid_surgery);
     terminate_child_process("PHARMACY", &pid_pharmacy);
     terminate_child_process("LAB", &pid_lab);
 
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SYSTEM", "DISABLE_LOGGING", "Disabling SHM logging");
+    #endif
     // Disable SHM logging before destroying SHM
     set_critical_log_shm_ptr(NULL);
 
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SYSTEM", "CLEANUP_SCHEDULER", "Cleaning up scheduler");
+    #endif
     cleanup_scheduler();
 
     #ifdef DEBUG
@@ -295,19 +320,35 @@ void manager_cleanup() {
         log_event(DEBUG_LOG, "IPC", "CLEANUP_RESULT", dbg_sem);
     #endif
 
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SYSTEM", "CLEANUP_CONFIG", "Cleaning up configuration");
+    #endif
     cleanup_config();
 
-    log_event(INFO, "SYSTEM", "SHUTDOWN", "System shutdown complete");
-
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SYSTEM", "CLOSE_LOGGING", "Closing logging system");
+    #endif
     close_logging();
+
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "SYSTEM", "MANAGER_CLEANUP_COMPLETE", "Manager cleanup completed");
+    #endif
 }
 
 void poison_pill_triage() {
-    msg_new_emergency_t poison_pill;
-    memset(&poison_pill, 0, sizeof(msg_new_emergency_t));
-    poison_pill.hdr.mtype = MSG_NEW_EMERGENCY;
-    poison_pill.hdr.kind = MSG_SHUTDOWN;
-    send_generic_message(mq_triage_id, &poison_pill, sizeof(msg_new_emergency_t));
+    // Send poison pill for emergency queue manager
+    msg_new_emergency_t poison_pill_emergency;
+    memset(&poison_pill_emergency, 0, sizeof(msg_new_emergency_t));
+    poison_pill_emergency.hdr.mtype = MSG_NEW_EMERGENCY;
+    poison_pill_emergency.hdr.kind = MSG_SHUTDOWN;
+    send_generic_message(mq_triage_id, &poison_pill_emergency, sizeof(msg_new_emergency_t));
+    
+    // Send poison pill for appointment queue manager
+    msg_new_appointment_t poison_pill_appointment;
+    memset(&poison_pill_appointment, 0, sizeof(msg_new_appointment_t));
+    poison_pill_appointment.hdr.mtype = MSG_NEW_APPOINTMENT;
+    poison_pill_appointment.hdr.kind = MSG_SHUTDOWN;
+    send_generic_message(mq_triage_id, &poison_pill_appointment, sizeof(msg_new_appointment_t));
 }
 
 void poison_pill_surgery() {
@@ -315,5 +356,21 @@ void poison_pill_surgery() {
     memset(&poison_pill, 0, sizeof(msg_new_surgery_t));
     poison_pill.hdr.mtype = MSG_NEW_SURGERY;
     poison_pill.hdr.kind = MSG_SHUTDOWN;
-    send_generic_message(mq_triage_id, &poison_pill, sizeof(msg_new_surgery_t));
+    send_generic_message(mq_surgery_id, &poison_pill, sizeof(msg_new_surgery_t));
+}
+
+void poison_pill_pharmacy() {
+    msg_pharmacy_request_t poison_pill;
+    memset(&poison_pill, 0, sizeof(msg_pharmacy_request_t));
+    poison_pill.hdr.mtype = PRIORITY_URGENT;
+    poison_pill.hdr.kind = MSG_SHUTDOWN;
+    send_generic_message(mq_pharmacy_id, &poison_pill, sizeof(msg_pharmacy_request_t));
+}
+
+void poison_pill_lab() {
+    msg_lab_request_t poison_pill;
+    memset(&poison_pill, 0, sizeof(msg_lab_request_t));
+    poison_pill.hdr.mtype = PRIORITY_URGENT;
+    poison_pill.hdr.kind = MSG_SHUTDOWN;
+    send_generic_message(mq_lab_id, &poison_pill, sizeof(msg_lab_request_t));
 }

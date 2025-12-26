@@ -353,23 +353,6 @@ void handle_command(char *cmd_buf, int current_time) {
         msg.scheduled_time = scheduled;
         msg.urgency = urgency_id;
         
-        /*
-        printf("[DEBUG] SURGERY parsed parameters:\n");
-        printf("  patient_id: %s\n", msg.hdr.patient_id);
-        printf("  init: %d, scheduled: %d, type: %d, urgency: %d\n", 
-               init, scheduled, type_id, urgency_id);
-        printf("  tests_count: %d, tests_id: [", msg.tests_count);
-        for (int i = 0; i < msg.tests_count; i++) {
-            printf("%d%s", msg.tests_id[i], (i < msg.tests_count - 1) ? "," : "");
-        }
-        printf("]\n");
-        printf("  meds_count: %d, meds_id: [", msg.meds_count);
-        for (int i = 0; i < msg.meds_count; i++) {
-            printf("%d%s", msg.meds_id[i], (i < msg.meds_count - 1) ? "," : "");
-        }
-        printf("]\n");
-        */
-        
         if (msg.hdr.timestamp <= current_time) {
             send_generic_message(mq_surgery_id, &msg, sizeof(msg));
         } else {

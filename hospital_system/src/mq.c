@@ -260,6 +260,29 @@ int receive_specific_message(int mq_id, void *msg_buffer, size_t total_struct_si
 }
 
 /**
+ * Receives a specific message type from a Message Queue (non-blocking).
+ * @param mq_id Queue ID.
+ * @param msg_buffer Pointer to the buffer where the message will be stored.
+ * @param total_struct_size sizeof(MESSAGE_TYPE).
+ * @param message_type The specific message type (mtype) to accept.
+ * @return 0 on success, -1 on failure (errno=ENOMSG if no message available).
+ */
+int receive_specific_message_nonblock(int mq_id, void *msg_buffer, size_t total_struct_size, long message_type) {
+    size_t payload_size = MSG_SIZE_CALC(total_struct_size);
+    
+    // msgrcv with positive msgtyp: Reads specific message type
+    // IPC_NOWAIT: Returns immediately if no message available
+    ssize_t result = msgrcv(mq_id, msg_buffer, payload_size, message_type, IPC_NOWAIT);
+
+    if (result == -1) {
+        // ENOMSG/EAGAIN: No message available - not an error for non-blocking
+        // EINTR: signal interruption - not an error
+        return -1;
+    }
+    return 0;
+}
+
+/**
  * Receives any message with mtype <= max_type from a Message Queue.
  * Useful for receiving messages in an operation_id range.
  * @param mq_id Queue ID.

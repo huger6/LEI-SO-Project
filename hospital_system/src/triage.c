@@ -27,6 +27,10 @@
 #define PATIENT_TYPE_APPOINTMENT 2
 #define MAX_WAIT_DEPENDENCIES_TIME 2000
 
+// Triage operation ID range: 1000-1999 (Manager uses 2000+)
+#define MIN_TRIAGE_OP_ID 1000
+#define MAX_TRIAGE_OP_ID 1999
+
 // --- Internal Structures ---
 
 typedef struct TriagePatient {
@@ -81,8 +85,8 @@ typedef struct {
     pthread_mutex_t mutex;
 } PatientQueue;
 
-// Global operation ID counter for pending patients
-static int next_pending_op_id = 2000;
+// Global operation ID counter for pending patients (range: 1000-1999)
+static int next_pending_op_id = MIN_TRIAGE_OP_ID;
 static pthread_mutex_t pending_op_id_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // --- Globals ---
@@ -109,6 +113,35 @@ pthread_t t_treatments[MAX_TREATMENT_THREADS];
 
 // --- Helper Functions ---
 
+/**
+ * Determine message priority (mtype) based on patient status.
+ * 
+ * Priority determination logic:
+ * - URGENT (1): Critical patients (stability <= threshold) OR highest priority (1)
+ * - HIGH (2): Low stability (< 2x threshold) OR high priority (2)
+ * - NORMAL (3): All other cases
+ * 
+ * @param priority  Patient's triage priority level (1-5, where 1 is highest)
+ * @param stability Patient's stability value (lower = more critical)
+ * @return PRIORITY_URGENT, PRIORITY_HIGH, or PRIORITY_NORMAL
+ */
+static long determine_patient_mtype(int priority, int stability) {
+    int critical_threshold = config->triage_critical_stability;
+    
+    // Critical patients or highest priority = URGENT
+    if (stability <= critical_threshold || priority == 1) {
+        return PRIORITY_URGENT;
+    }
+    
+    // Low stability (< 2x threshold) or high priority (2) = HIGH
+    if (stability < (critical_threshold * 2) || priority == 2) {
+        return PRIORITY_HIGH;
+    }
+    
+    // All other cases = NORMAL
+    return PRIORITY_NORMAL;
+}
+
 static void wake_all_threads(void) {
     safe_pthread_mutex_lock(&treatment_mutex);
 
@@ -130,6 +163,10 @@ static void wake_all_threads(void) {
 static int get_next_pending_op_id(void) {
     pthread_mutex_lock(&pending_op_id_mutex);
     int id = next_pending_op_id++;
+    // Wraparound to stay within triage range (1000-1999)
+    if (next_pending_op_id > MAX_TRIAGE_OP_ID) {
+        next_pending_op_id = MIN_TRIAGE_OP_ID;
+    }
     pthread_mutex_unlock(&pending_op_id_mutex);
     return id;
 }
@@ -231,6 +268,18 @@ static void check_pending_timeouts(void) {
                      expired->id, MAX_WAIT_DEPENDENCIES_TIME);
             log_event(WARNING, "TRIAGE", "HOLD_TIMEOUT", log_msg);
             
+            #ifdef DEBUG
+                {
+                    char debug_msg[120];
+                    snprintf(debug_msg, sizeof(debug_msg), 
+                            "TRIAGE_TIMEOUT: %s (meds: %d/%d; tests: %d/%d)", 
+                            expired->id, 
+                            expired->meds_ok, expired->waiting_meds,
+                            expired->labs_ok, expired->waiting_labs);
+                    log_event(DEBUG_LOG, "TRIAGE", "TIMEOUT_STATUS", debug_msg);
+                }
+            #endif
+            
             free(expired);
         } else {
             curr = &(*curr)->next;
@@ -257,8 +306,10 @@ void *response_dispatcher(void *arg) {
     while (!check_shutdown()) {
         memset(&msg, 0, sizeof(msg));
         
-        // Receive any message type (0 = FIFO order)
-        int result = receive_generic_message(mq_responses_id, &msg, sizeof(msg), 0);
+        // Receive messages with mtype <= MAX_TRIAGE_OP_ID (1999)
+        // This uses receive_message_up_to_type which calls msgrcv with negative msgtyp
+        // ensuring we only get Triage messages and leave Manager messages (2000+) in the queue
+        int result = receive_message_up_to_type(mq_responses_id, &msg, sizeof(msg), MAX_TRIAGE_OP_ID);
         
         if (result == -1) {
             if (errno == EINTR) continue;
@@ -266,7 +317,7 @@ void *response_dispatcher(void *arg) {
             continue;
         }
         
-        // Check for shutdown message
+        // Check for shutdown message (shutdown for triage uses priority mtype like PRIORITY_NORMAL=3)
         if (msg.hdr.kind == MSG_SHUTDOWN) {
             break;
         }
@@ -274,8 +325,8 @@ void *response_dispatcher(void *arg) {
         // Extract operation_id from mtype
         int operation_id = (int)msg.hdr.mtype;
         
-        // Check if this is for a pending patient (op_id >= 2000)
-        if (operation_id >= 2000) {
+        // Check if this is for a pending patient (op_id in triage range)
+        if (operation_id >= MIN_TRIAGE_OP_ID && operation_id <= MAX_TRIAGE_OP_ID) {
             safe_pthread_mutex_lock(&pending_mutex);
             PendingPatient *pending = find_pending_by_op_id(operation_id);
             
@@ -393,16 +444,28 @@ int remove_patient_from_queue(PatientQueue *q, TriagePatient *p) {
 
 void *emergency_queue_manager(void *arg) {
     (void)arg;
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "THREAD_START", "Emergency queue manager thread started");
+    #endif
 
     msg_new_emergency_t msg;
     while (!check_shutdown()) {
         if (receive_specific_message(mq_triage_id, &msg, sizeof(msg_new_emergency_t), MSG_NEW_EMERGENCY) == -1) {
             if (errno == EINTR) continue;
+            #ifdef DEBUG
+                char err_msg[128];
+                snprintf(err_msg, sizeof(err_msg), "Failed to receive emergency msg, errno=%d (%s)", errno, strerror(errno));
+                log_event(DEBUG_LOG, "TRIAGE", "MQ_RECEIVE_FAIL", err_msg);
+            #endif
             log_event(ERROR, "TRIAGE", "MQ_ERROR", "Failed to receive emergency msg");
             break;
         }
         
         if (msg.hdr.kind == MSG_SHUTDOWN) {
+            #ifdef DEBUG
+                log_event(DEBUG_LOG, "TRIAGE", "THREAD_SHUTDOWN", "Emergency queue manager received shutdown");
+            #endif
             wake_all_threads();
             break;
         }
@@ -443,20 +506,37 @@ void *emergency_queue_manager(void *arg) {
         safe_pthread_mutex_unlock(&emergency_queue.mutex);
         safe_pthread_cond_signal(&patient_ready_cond);
     }
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "THREAD_EXIT", "Emergency queue manager thread exiting");
+    #endif
+    
     return NULL;
 }
 
 void *appointment_queue_manager(void *arg) {
     (void)arg;
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "THREAD_START", "Appointment queue manager thread started");
+    #endif
 
     msg_new_appointment_t msg;
     while (!check_shutdown()) {
         if (receive_specific_message(mq_triage_id, &msg, sizeof(msg_new_appointment_t), MSG_NEW_APPOINTMENT) == -1) {
             if (errno == EINTR) continue;
+            #ifdef DEBUG
+                char err_msg[128];
+                snprintf(err_msg, sizeof(err_msg), "Failed to receive appointment msg, errno=%d (%s)", errno, strerror(errno));
+                log_event(DEBUG_LOG, "TRIAGE", "MQ_RECEIVE_FAIL", err_msg);
+            #endif
             break;
         }
         
         if (msg.hdr.kind == MSG_SHUTDOWN) {
+            #ifdef DEBUG
+                log_event(DEBUG_LOG, "TRIAGE", "THREAD_SHUTDOWN", "Appointment queue manager received shutdown");
+            #endif
             safe_pthread_mutex_lock(&treatment_mutex);
 
             safe_pthread_cond_broadcast(&patient_ready_cond);
@@ -498,6 +578,11 @@ void *appointment_queue_manager(void *arg) {
         safe_pthread_mutex_unlock(&appointment_queue.mutex);
         safe_pthread_cond_signal(&patient_ready_cond);
     }
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "THREAD_EXIT", "Appointment queue manager thread exiting");
+    #endif
+    
     return NULL;
 }
 
@@ -687,11 +772,14 @@ void *treatment_worker(void *arg) {
             // Get unique operation ID for this patient
             int operation_id = get_next_pending_op_id();
             
+            // Determine message priority based on patient status
+            long msg_priority = determine_patient_mtype(p->priority, p->stability);
+            
             // Send async requests
             if (needs_meds) {
                 msg_pharmacy_request_t req;
                 memset(&req, 0, sizeof(msg_pharmacy_request_t));
-                req.hdr.mtype = operation_id;
+                req.hdr.mtype = msg_priority;
                 req.hdr.kind = MSG_PHARMACY_REQUEST;
                 strcpy(req.hdr.patient_id, p->id);
                 req.hdr.operation_id = operation_id;
@@ -707,7 +795,7 @@ void *treatment_worker(void *arg) {
             if (needs_labs) {
                 msg_lab_request_t req;
                 memset(&req, 0, sizeof(msg_lab_request_t));
-                req.hdr.mtype = operation_id;
+                req.hdr.mtype = msg_priority;
                 req.hdr.kind = MSG_LAB_REQUEST;
                 strcpy(req.hdr.patient_id, p->id);
                 req.hdr.operation_id = operation_id;
@@ -752,30 +840,67 @@ void *treatment_worker(void *arg) {
 // --- Main Triage Process ---
 
 void triage_main(void) {
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "PROCESS_START", "Triage process main started");
+    #endif
+    
     setup_child_signals();
     
     init_queue(&emergency_queue);
     init_queue(&appointment_queue);
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "THREAD_CREATE", "Creating emergency manager thread");
+    #endif
     // Start Threads
     safe_pthread_create(&t_emergency_mgr, NULL, emergency_queue_manager, NULL);
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "THREAD_CREATE", "Creating appointment manager thread");
+    #endif
     safe_pthread_create(&t_appointment_mgr, NULL, appointment_queue_manager, NULL);
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "THREAD_CREATE", "Creating vital monitor thread");
+    #endif
     safe_pthread_create(&t_vital_monitor, NULL, vital_stability_monitor, NULL);
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "THREAD_CREATE", "Creating response dispatcher thread");
+    #endif
     // Start Response Dispatcher (must be before treatment workers)
     safe_pthread_create(&t_response_dispatcher, NULL, response_dispatcher, NULL);
     
     for (int i = 0; i < MAX_TREATMENT_THREADS; i++) {
         int *arg = malloc(sizeof(int));
         *arg = i;
+        #ifdef DEBUG
+            char thread_msg[64];
+            snprintf(thread_msg, sizeof(thread_msg), "Creating treatment worker thread %d", i);
+            log_event(DEBUG_LOG, "TRIAGE", "THREAD_CREATE", thread_msg);
+        #endif
         safe_pthread_create(&t_treatments[i], NULL, treatment_worker, arg);
     }
 
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "THREAD_JOIN", "Waiting for emergency manager thread to join");
+    #endif
     // Wait for shutdown
     safe_pthread_join(t_emergency_mgr, NULL);
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "THREAD_JOIN", "Waiting for appointment manager thread to join");
+    #endif
     safe_pthread_join(t_appointment_mgr, NULL);
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "THREAD_JOIN", "Waiting for vital monitor thread to join");
+    #endif
     safe_pthread_join(t_vital_monitor, NULL);
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "SHUTDOWN_MSG", "Sending shutdown message to response dispatcher");
+    #endif
     // Send shutdown message to response dispatcher to unblock it
     msg_header_t shutdown_msg;
     memset(&shutdown_msg, 0, sizeof(shutdown_msg));
@@ -785,12 +910,23 @@ void triage_main(void) {
     strcpy(shutdown_msg.patient_id, "TRIAGE_SHUTDOWN");
     send_generic_message(mq_responses_id, &shutdown_msg, sizeof(msg_header_t));
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "THREAD_JOIN", "Waiting for response dispatcher thread to join");
+    #endif
     safe_pthread_join(t_response_dispatcher, NULL);
     
     for (int i = 0; i < MAX_TREATMENT_THREADS; i++) {
+        #ifdef DEBUG
+            char join_msg[64];
+            snprintf(join_msg, sizeof(join_msg), "Waiting for treatment worker thread %d to join", i);
+            log_event(DEBUG_LOG, "TRIAGE", "THREAD_JOIN", join_msg);
+        #endif
         safe_pthread_join(t_treatments[i], NULL);
     }
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "CLEANUP", "Cleaning up pending patients list");
+    #endif
     // Cleanup pending patients list
     safe_pthread_mutex_lock(&pending_mutex);
     while (pending_patients_head) {
@@ -800,7 +936,13 @@ void triage_main(void) {
     }
     safe_pthread_mutex_unlock(&pending_mutex);
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "CHILD_CLEANUP", "Calling child_cleanup");
+    #endif
     child_cleanup();
 
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "TRIAGE", "PROCESS_EXIT", "Triage process exiting");
+    #endif
     exit(EXIT_SUCCESS);
 }

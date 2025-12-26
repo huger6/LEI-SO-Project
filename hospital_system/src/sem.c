@@ -1,13 +1,17 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <semaphore.h>
 #include <errno.h>
+#include <time.h>
 
 #include "../include/sem.h"
 #include "../include/log.h"
 #include "../include/config.h"
+#include "../include/manager_utils.h"
 
 #define SEM_PERMS       0644
 
@@ -190,10 +194,10 @@ int unlink_all_semaphores(void) {
 }
 
 /**
- * Wrapper for sem_wait that handles EINTR and logs errors
+ * Wrapper for sem_wait that handles EINTR, checks for shutdown, and uses a timeout
  * @param sem Pointer to the semaphore to wait on
  * @param sem_name Name of the semaphore (for logging purposes)
- * @return 0 on success, -1 on failure
+ * @return 0 on success, -1 on failure or shutdown
  */
 int sem_wait_safe(sem_t *sem, const char *sem_name) {
     char log_buffer[256];
@@ -205,13 +209,30 @@ int sem_wait_safe(sem_t *sem, const char *sem_name) {
     }
 
     while (1) {
-        if (sem_wait(sem) == 0) {
+        // Check for shutdown before waiting
+        if (check_shutdown()) {
+            return -1;
+        }
+        
+        // Use sem_timedwait with a short timeout to allow periodic shutdown checks
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 100000000; // 100ms timeout
+        if (ts.tv_nsec >= 1000000000) {
+            ts.tv_sec += 1;
+            ts.tv_nsec -= 1000000000;
+        }
+        
+        if (sem_timedwait(sem, &ts) == 0) {
             return 0; // Success: Resource acquired
         }
 
         // Handle specific errors
         if (errno == EINTR) {
             // The call was interrupted by a signal handler
+            continue;
+        } else if (errno == ETIMEDOUT) {
+            // Timeout expired - loop back and check shutdown again
             continue;
         } else {
             snprintf(log_buffer, sizeof(log_buffer), "sem_wait failed on %s. Errno: %d", sem_name ? sem_name : "UNKNOWN", errno);

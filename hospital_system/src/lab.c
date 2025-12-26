@@ -634,6 +634,12 @@ static void dispatcher_loop(void) {
             continue;
         }
         
+        // Check for shutdown message
+        if (request.hdr.kind == MSG_SHUTDOWN) {
+            log_event(INFO, "LAB", "SHUTDOWN_RECV", "Received shutdown signal");
+            break;
+        }
+        
         // Validate message type
         if (request.hdr.kind != MSG_LAB_REQUEST) {
             char log_msg[64];
@@ -667,15 +673,29 @@ static void dispatcher_loop(void) {
 // --- Main Entry Point ---
 
 void lab_main(void) {
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "LAB", "PROCESS_START", "Lab process main started");
+    #endif
+    
     setup_child_signals();
     
     // Seed random number generator
     srand((unsigned int)(time(NULL) ^ getpid()));
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "LAB", "DISPATCHER_START", "Starting lab dispatcher loop");
+    #endif
     // Run the dispatcher loop
     dispatcher_loop();
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "LAB", "CHILD_CLEANUP", "Calling child_cleanup");
+    #endif
     child_cleanup();
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "LAB", "PROCESS_EXIT", "Lab process exiting");
+    #endif
     exit(EXIT_SUCCESS);
 }
 

@@ -510,6 +510,12 @@ static void process_pharmacy_requests(void) {
             continue;
         }
         
+        // Check for shutdown message
+        if (request.hdr.kind == MSG_SHUTDOWN) {
+            log_event(INFO, "PHARMACY", "SHUTDOWN_RECV", "Received shutdown signal");
+            break;
+        }
+        
         // Validate message type
         if (request.hdr.kind != MSG_PHARMACY_REQUEST) {
             char log_msg[64];
@@ -557,14 +563,28 @@ static void process_pharmacy_requests(void) {
 // --- Main Entry Point ---
 
 void pharmacy_main(void) {
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "PHARMACY", "PROCESS_START", "Pharmacy process main started");
+    #endif
+    
     setup_child_signals();
     
     // Seed random number generator
     srand((unsigned int)(time(NULL) ^ getpid()));
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "PHARMACY", "DISPATCHER_START", "Starting pharmacy request processing");
+    #endif
     // Run the dispatcher loop
     process_pharmacy_requests();
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "PHARMACY", "CHILD_CLEANUP", "Calling child_cleanup");
+    #endif
     child_cleanup();
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "PHARMACY", "PROCESS_EXIT", "Pharmacy process exiting");
+    #endif
     exit(EXIT_SUCCESS);
 }

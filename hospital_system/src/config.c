@@ -219,7 +219,6 @@ int load_config(const char *filename) {
     }
 
     char line[256];
-    char buffer[256];
     config->med_count = 0;
     config_param_t param;
 
@@ -258,8 +257,11 @@ int load_config(const char *filename) {
                 // Check if it's a medication (contains ':')
                 char *colon = strchr(param.value, ':');
                 if (colon && config->med_count < 15) {
-                    snprintf(buffer, sizeof(buffer), "%s=%s", param.key, param.value);
-                    log_event(INFO, "CONFIG", "PARAM_LOADED", buffer);
+                    #ifdef DEBUG
+                        char buffer[256];
+                        snprintf(buffer, sizeof(buffer), "%s=%s", param.key, param.value);
+                        log_event(INFO, "CONFIG", "PARAM_LOADED", buffer);
+                    #endif
 
                     *colon = '\0';
                     int stock = atoi(param.value);
@@ -274,8 +276,11 @@ int load_config(const char *filename) {
             }
 
             if (is_standard) {
-                snprintf(buffer, sizeof(buffer), "%s=%s", param.key, param.value);
-                log_event(INFO, "CONFIG", "PARAM_LOADED", buffer);
+                #ifdef DEBUG
+                    char buffer[256];
+                    snprintf(buffer, sizeof(buffer), "%s=%s", param.key, param.value);
+                    log_event(INFO, "CONFIG", "PARAM_LOADED", buffer);
+                #endif
             }
         }
     }

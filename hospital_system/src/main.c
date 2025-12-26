@@ -69,6 +69,10 @@ pthread_t t_notification_monitor;
 void *notification_monitor(void *arg) {
     (void)arg;
     
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "MANAGER", "THREAD_START", "Notification monitor thread started");
+    #endif
+    
     // Buffer large enough for any response message
     union {
         msg_header_t hdr;
@@ -77,16 +81,32 @@ void *notification_monitor(void *arg) {
     
     while (!check_shutdown()) {
         memset(&msg, 0, sizeof(msg));
+        
+        // Use blocking receive - thread will be cancelled via pthread_cancel during shutdown
+        // msgrcv is a POSIX cancellation point, so pthread_cancel will interrupt it
         int result = receive_specific_message(mq_responses_id, &msg, sizeof(msg), 
                                               MANAGER_OPERATION_ID_BASE);
         
         if (result == -1) {
-            if (check_shutdown()) break;
+            if (check_shutdown()) {
+                #ifdef DEBUG
+                    log_event(DEBUG_LOG, "MANAGER", "THREAD_SHUTDOWN", "Notification monitor thread exiting due to shutdown");
+                #endif
+                break;
+            }
+            #ifdef DEBUG
+                char err_msg[128];
+                snprintf(err_msg, sizeof(err_msg), "Failed to receive message, errno=%d (%s)", errno, strerror(errno));
+                log_event(DEBUG_LOG, "MANAGER", "MSG_RECEIVE_FAIL", err_msg);
+            #endif
             continue;
         }
         
         // Check for shutdown message
         if (msg.hdr.kind == MSG_SHUTDOWN) {
+            #ifdef DEBUG
+                log_event(DEBUG_LOG, "MANAGER", "THREAD_SHUTDOWN", "Received shutdown message, exiting");
+            #endif
             break;
         }
         
@@ -110,13 +130,17 @@ void *notification_monitor(void *arg) {
                 
             default:
                 #ifdef DEBUG
-                snprintf(log_msg, sizeof(log_msg), 
-                         "Feedback (kind: %d) for patient %s", msg.hdr.kind, msg.hdr.patient_id);
-                log_event(DEBUG_LOG, "MANAGER", "FEEDBACK", log_msg);
+                    snprintf(log_msg, sizeof(log_msg), 
+                            "Feedback (kind: %d) for patient %s", msg.hdr.kind, msg.hdr.patient_id);
+                    log_event(DEBUG_LOG, "MANAGER", "FEEDBACK", log_msg);
                 #endif
                 break;
         }
     }
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "MANAGER", "THREAD_EXIT", "Notification monitor thread exiting");
+    #endif
     
     return NULL;
 }
@@ -302,6 +326,10 @@ int main(void) {
     // --- Start Notification Monitor Thread ---
     if (safe_pthread_create(&t_notification_monitor, NULL, notification_monitor, NULL) != 0) {
         log_event(ERROR, "MANAGER", "THREAD_FAIL", "Failed to create notification monitor");
+    } else {
+        #ifdef DEBUG
+            log_event(DEBUG_LOG, "MANAGER", "THREAD_START", "Notification monitor thread created successfully");
+        #endif
     }
 
     // --- Main loop ---
@@ -416,9 +444,11 @@ int main(void) {
                             log_event(INFO, "SYSTEM", "SIGINT", "Shutdown signal received");
                             set_shutdown();
 
-                            // --- Broadcast SHUTDOWN message ---
+                            // --- Broadcast SHUTDOWN message to all child processes ---
                             poison_pill_triage();
                             poison_pill_surgery();
+                            poison_pill_pharmacy();
+                            poison_pill_lab();
                         }
                         break;
 
@@ -528,13 +558,17 @@ int main(void) {
     send_generic_message(mq_responses_id, &shutdown_msg, sizeof(msg_header_t));
 
     #ifdef DEBUG
-        char dbg[128];
-        snprintf(dbg, sizeof(dbg), "Sent manager thread shutdown message (mq_responses_id=%d)", mq_responses_id);
-        log_event(DEBUG_LOG, "MANAGER", "THREAD_SHUTDOWN", dbg);
+        log_event(DEBUG_LOG, "MANAGER", "THREAD_CANCEL", "Cancelling notification monitor thread");
     #endif
     
     // Wait for the notification monitor thread to finish
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "MANAGER", "THREAD_JOIN", "Waiting for notification monitor thread to join");
+    #endif
     safe_pthread_join(t_notification_monitor, NULL);
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "MANAGER", "THREAD_JOINED", "Notification monitor thread joined");
+    #endif
     
     manager_cleanup();
 
