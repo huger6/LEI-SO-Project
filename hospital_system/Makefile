@@ -31,7 +31,7 @@ $(OBJ_DIR):
 
 clean:
 	rm -rf $(OBJ_DIR) $(EXEC)
-	[ -d results ] && find results -type f -delete || true
+	[ -d results ] && find results -type f -name "*.txt" -delete || true
 	rm -f logs/hospital_log.log
 
 ipc_clean:
