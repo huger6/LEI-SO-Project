@@ -21,8 +21,8 @@
 #include "../include/safe_threads.h"
 
 extern volatile sig_atomic_t g_shutdown;
-volatile sig_atomic_t g_stop_child = 0;
 
+// Mutex for g_shutdown flag
 pthread_mutex_t state_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void terminate_child_process(const char *role, pid_t *pid_ptr) {
@@ -87,7 +87,6 @@ static void generic_signal_handler(int sig) {
 // Handler for child processes (no SA_RESTART)
 static void child_signal_handler(int sig) {
     (void)sig;
-    g_stop_child = 1;
     g_shutdown = 1;
 }
 

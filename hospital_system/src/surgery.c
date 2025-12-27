@@ -35,7 +35,7 @@
 
 // Maximum time (in simulation units) a patient can wait on hold for dependencies
 // If exceeded, surgery is cancelled
-#define MAX_WAIT_DEPENDENCIES_TIME 2000
+#define MAX_WAIT_DEPENDENCIES_TIME 8000
 
 // Initial timeout (in simulation units) before putting patient on hold
 #define INITIAL_DEPENDENCY_TIMEOUT 150
@@ -110,6 +110,11 @@ static pthread_mutex_t pending_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Condition variable for medical teams
 static pthread_cond_t teams_available_cond = PTHREAD_COND_INITIALIZER;
+
+// Active worker count for cleanup synchronization
+static int active_worker_count = 0;
+static pthread_mutex_t worker_count_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t workers_done_cond = PTHREAD_COND_INITIALIZER;
 
 // --- Helper Functions ---
 
@@ -813,6 +818,15 @@ put_on_hold:
     safe_pthread_mutex_destroy(&surgery->mutex);
     safe_pthread_cond_destroy(&surgery->cond);
     free(surgery);
+    
+    // Decrement worker count and signal if done
+    safe_pthread_mutex_lock(&worker_count_mutex);
+    active_worker_count--;
+    if (active_worker_count == 0) {
+        safe_pthread_cond_signal(&workers_done_cond);
+    }
+    safe_pthread_mutex_unlock(&worker_count_mutex);
+    
     return NULL;
 
 cleanup:
@@ -829,6 +843,15 @@ cleanup:
     safe_pthread_cond_destroy(&surgery->cond);
     
     free(surgery);
+    
+    // Decrement worker count and signal if done
+    safe_pthread_mutex_lock(&worker_count_mutex);
+    active_worker_count--;
+    if (active_worker_count == 0) {
+        safe_pthread_cond_signal(&workers_done_cond);
+    }
+    safe_pthread_mutex_unlock(&worker_count_mutex);
+    
     return NULL;
 }
 
@@ -1023,9 +1046,18 @@ static void spawn_surgery_worker(msg_new_surgery_t *msg) {
              surgery->urgency, surgery->scheduled_time);
     log_event(INFO, "SURGERY", "TASK_RECEIVED", log_msg);
     
+    // Increment active worker count BEFORE creating thread (will be decremented by thread on exit)
+    safe_pthread_mutex_lock(&worker_count_mutex);
+    active_worker_count++;
+    safe_pthread_mutex_unlock(&worker_count_mutex);
+    
     // Spawn worker thread
     if (safe_pthread_create(&surgery->thread, NULL, surgery_worker, surgery) != 0) {
         log_event(ERROR, "SURGERY", "THREAD_FAIL", "Failed to create surgery worker thread");
+        // Undo the increment since thread didn't start
+        safe_pthread_mutex_lock(&worker_count_mutex);
+        active_worker_count--;
+        safe_pthread_mutex_unlock(&worker_count_mutex);
         unregister_surgery(surgery);
         safe_pthread_mutex_destroy(&surgery->mutex);
         safe_pthread_cond_destroy(&surgery->cond);
@@ -1125,6 +1157,15 @@ cleanup:
     safe_pthread_mutex_destroy(&surgery->mutex);
     safe_pthread_cond_destroy(&surgery->cond);
     free(surgery);
+    
+    // Decrement worker count and signal if done
+    safe_pthread_mutex_lock(&worker_count_mutex);
+    active_worker_count--;
+    if (active_worker_count == 0) {
+        safe_pthread_cond_signal(&workers_done_cond);
+    }
+    safe_pthread_mutex_unlock(&worker_count_mutex);
+    
     return NULL;
 }
 
@@ -1175,9 +1216,18 @@ static void spawn_surgery_from_pending(pending_surgery_t *pending) {
              surgery->patient_id, get_room_name(surgery->surgery_type));
     log_event(INFO, "SURGERY", "RESPAWN_START", log_msg);
     
+    // Increment active worker count BEFORE creating thread (will be decremented by thread on exit)
+    safe_pthread_mutex_lock(&worker_count_mutex);
+    active_worker_count++;
+    safe_pthread_mutex_unlock(&worker_count_mutex);
+    
     // Spawn resumed worker thread
     if (safe_pthread_create(&surgery->thread, NULL, surgery_worker_resumed, surgery) != 0) {
         log_event(ERROR, "SURGERY", "THREAD_FAIL", "Failed to create resumed surgery worker thread");
+        // Undo the increment since thread didn't start
+        safe_pthread_mutex_lock(&worker_count_mutex);
+        active_worker_count--;
+        safe_pthread_mutex_unlock(&worker_count_mutex);
         unregister_surgery(surgery);
         safe_pthread_mutex_destroy(&surgery->mutex);
         safe_pthread_cond_destroy(&surgery->cond);
@@ -1270,10 +1320,33 @@ void surgery_main(void) {
     dispatcher_loop();
     
     #ifdef DEBUG
-        log_event(DEBUG_LOG, "SURGERY", "WAIT_WORKERS", "Waiting for detached worker threads to complete");
+        log_event(DEBUG_LOG, "SURGERY", "WAIT_WORKERS", "Waiting for worker threads to complete");
     #endif
-    // Wait briefly for detached worker threads to complete
-    wait_time_units(10);
+    // Wait for all worker threads to complete (with timeout)
+    safe_pthread_mutex_lock(&worker_count_mutex);
+    
+    // Use timed wait to avoid blocking forever during shutdown
+    struct timespec ts;
+    int max_wait_seconds = 5; // Maximum 5 seconds to wait for workers
+    
+    while (active_worker_count > 0) {
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 1; // 1 second timeout per iteration
+        
+        int rc = pthread_cond_timedwait(&workers_done_cond, &worker_count_mutex, &ts);
+        if (rc == ETIMEDOUT) {
+            max_wait_seconds--;
+            if (max_wait_seconds <= 0) {
+                // Timeout expired, force exit - workers will be cleaned up by OS
+                char log_msg[128];
+                snprintf(log_msg, sizeof(log_msg), 
+                         "Timeout waiting for %d workers, forcing cleanup", active_worker_count);
+                log_event(WARNING, "SURGERY", "WORKER_TIMEOUT", log_msg);
+                break;
+            }
+        }
+    }
+    safe_pthread_mutex_unlock(&worker_count_mutex);
     
     #ifdef DEBUG
         log_event(DEBUG_LOG, "SURGERY", "CLEANUP_ACTIVE", "Cleaning up remaining active surgeries");

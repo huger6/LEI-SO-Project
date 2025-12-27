@@ -23,7 +23,7 @@
 #include "../include/pipes.h"
 
 // --- Constants ---
-#define MAX_CONCURRENT_REQUESTS 20
+#define MAX_CONCURRENT_REQUESTS 200
 
 // --- Worker Thread Argument Structure ---
 typedef struct {
@@ -38,9 +38,9 @@ typedef struct {
 } pharmacy_worker_args_t;
 
 // --- Active Workers Registry ---
-static pthread_t active_workers[MAX_CONCURRENT_REQUESTS];
 static int active_worker_count = 0;
 static pthread_mutex_t workers_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t workers_done_cond = PTHREAD_COND_INITIALIZER;
 
 // --- Helper Functions ---
 
@@ -203,12 +203,19 @@ static int write_delivery_file(const char *patient_id, int *meds_id, int *meds_q
         return -1;
     }
     
+    // Use thread-safe ctime_r() instead of ctime() to avoid race condition
+    // on the static buffer used by ctime()/asctime()
+    char request_time_str[26];
+    char completion_time_str[26];
+    ctime_r(&request_time, request_time_str);
+    ctime_r(&completion_time, completion_time_str);
+    
     fprintf(fp, "============================================\n");
     fprintf(fp, "       PHARMACY DELIVERY RECORD\n");
     fprintf(fp, "============================================\n\n");
     fprintf(fp, "Patient/Request ID: %s\n", patient_id);
-    fprintf(fp, "Request Time:       %s", ctime(&request_time));
-    fprintf(fp, "Delivery Time:      %s", ctime(&completion_time));
+    fprintf(fp, "Request Time:       %s", request_time_str);
+    fprintf(fp, "Delivery Time:      %s", completion_time_str);
     fprintf(fp, "Items Delivered:    %d\n\n", meds_count);
     fprintf(fp, "--------------------------------------------\n");
     fprintf(fp, "              MEDICATIONS\n");
@@ -326,21 +333,17 @@ static void* pharmacy_worker_thread(void *arg) {
     
     // Acquire pharmacy access (semaphore controls concurrent access)
     if (acquire_pharmacy_access() != 0) {
-        if (check_shutdown()) {
-            free(args);
-            return NULL;
+        if (!check_shutdown()) {
+            log_event(ERROR, "PHARMACY", "SEM_FAIL", "Failed to acquire pharmacy access");
+            send_pharmacy_notification(args->patient_id, args->operation_id, 0, args->sender);
         }
-        log_event(ERROR, "PHARMACY", "SEM_FAIL", "Failed to acquire pharmacy access");
-        send_pharmacy_notification(args->patient_id, args->operation_id, 0, args->sender);
-        free(args);
-        return NULL;
+        goto cleanup;
     }
     
     // Check shutdown after acquiring
     if (check_shutdown()) {
         release_pharmacy_access();
-        free(args);
-        return NULL;
+        goto cleanup;
     }
     
     // Check stock availability
@@ -363,8 +366,7 @@ static void* pharmacy_worker_thread(void *arg) {
         
         if (check_shutdown()) {
             release_reservation(args->meds_id, args->meds_qty, args->meds_count);
-            free(args);
-            return NULL;
+            goto cleanup;
         }
         
         // Re-acquire for dispensing
@@ -374,8 +376,7 @@ static void* pharmacy_worker_thread(void *arg) {
             }
             release_reservation(args->meds_id, args->meds_qty, args->meds_count);
             send_pharmacy_notification(args->patient_id, args->operation_id, 0, args->sender);
-            free(args);
-            return NULL;
+            goto cleanup;
         }
         
         // Dispense medications
@@ -419,9 +420,17 @@ static void* pharmacy_worker_thread(void *arg) {
     snprintf(log_msg, sizeof(log_msg), "Worker completed for %s (success: %d)",
              args->patient_id, success);
     log_event(INFO, "PHARMACY", "WORKER_COMPLETE", log_msg);
-    
+
+cleanup:
     // Free arguments
     free(args);
+    
+    // Decrement active worker count and signal waiting spawners
+    safe_pthread_mutex_lock(&workers_mutex);
+    active_worker_count--;
+    // Always signal - wakes up spawners waiting for capacity OR cleanup waiting for all done
+    safe_pthread_cond_signal(&workers_done_cond);
+    safe_pthread_mutex_unlock(&workers_mutex);
     
     return NULL;
 }
@@ -457,21 +466,39 @@ static int spawn_worker(msg_pharmacy_request_t *request) {
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     
+    // Wait if we're at capacity (MAX_CONCURRENT_REQUESTS)
+    safe_pthread_mutex_lock(&workers_mutex);
+    while (active_worker_count >= MAX_CONCURRENT_REQUESTS && !check_shutdown()) {
+        // Use timed wait to check shutdown periodically
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 1;  // 1 second timeout
+        pthread_cond_timedwait(&workers_done_cond, &workers_mutex, &ts);
+    }
+    
+    if (check_shutdown()) {
+        safe_pthread_mutex_unlock(&workers_mutex);
+        free(args);
+        pthread_attr_destroy(&attr);
+        return -1;
+    }
+    
+    // Increment worker count BEFORE creating thread (will be decremented by thread on exit)
+    active_worker_count++;
+    safe_pthread_mutex_unlock(&workers_mutex);
+    
     if (safe_pthread_create(&thread, &attr, pharmacy_worker_thread, args) != 0) {
         log_event(ERROR, "PHARMACY", "THREAD_FAIL", "Failed to create worker thread");
+        // Undo the increment since thread didn't start
+        safe_pthread_mutex_lock(&workers_mutex);
+        active_worker_count--;
+        safe_pthread_mutex_unlock(&workers_mutex);
         free(args);
         pthread_attr_destroy(&attr);
         return -1;
     }
     
     pthread_attr_destroy(&attr);
-    
-    // Track active worker (for potential cleanup)
-    safe_pthread_mutex_lock(&workers_mutex);
-    if (active_worker_count < MAX_CONCURRENT_REQUESTS) {
-        active_workers[active_worker_count++] = thread;
-    }
-    safe_pthread_mutex_unlock(&workers_mutex);
     
     char log_msg[128];
     snprintf(log_msg, sizeof(log_msg), "Spawned worker for %s (%d items, priority: %d)",
@@ -577,6 +604,35 @@ void pharmacy_main(void) {
     #endif
     // Run the dispatcher loop
     process_pharmacy_requests();
+    
+    // Wait for all worker threads to complete (with timeout)
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "PHARMACY", "WAIT_WORKERS", "Waiting for worker threads to complete");
+    #endif
+    safe_pthread_mutex_lock(&workers_mutex);
+    
+    // Use timed wait to avoid blocking forever during shutdown
+    struct timespec ts;
+    int max_wait_seconds = 5; // Maximum 5 seconds to wait for workers
+    
+    while (active_worker_count > 0) {
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 1; // 1 second timeout per iteration
+        
+        int rc = pthread_cond_timedwait(&workers_done_cond, &workers_mutex, &ts);
+        if (rc == ETIMEDOUT) {
+            max_wait_seconds--;
+            if (max_wait_seconds <= 0) {
+                // Timeout expired, force exit - workers will be cleaned up by OS
+                char log_msg[128];
+                snprintf(log_msg, sizeof(log_msg), 
+                         "Timeout waiting for %d workers, forcing cleanup", active_worker_count);
+                log_event(WARNING, "PHARMACY", "WORKER_TIMEOUT", log_msg);
+                break;
+            }
+        }
+    }
+    safe_pthread_mutex_unlock(&workers_mutex);
     
     #ifdef DEBUG
         log_event(DEBUG_LOG, "PHARMACY", "CHILD_CLEANUP", "Calling child_cleanup");

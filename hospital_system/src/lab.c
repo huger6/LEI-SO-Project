@@ -34,7 +34,7 @@
 #define TEST_HEPAT      4
 #define TEST_PREOP      5
 
-#define MAX_CONCURRENT_TESTS 20
+#define MAX_CONCURRENT_TESTS 200
 
 /**
  * Acquires a slot for a specific laboratory
@@ -106,9 +106,9 @@ typedef struct {
 } lab_worker_args_t;
 
 // --- Active Workers Registry ---
-static pthread_t active_workers[MAX_CONCURRENT_TESTS];
 static int active_worker_count = 0;
 static pthread_mutex_t workers_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t workers_done_cond = PTHREAD_COND_INITIALIZER;
 
 // --- Helper Functions ---
 
@@ -237,12 +237,19 @@ static int write_results_file(const char *patient_id, int tests_count, int *test
         return -1;
     }
     
+    // Use thread-safe ctime_r() instead of ctime() to avoid race condition
+    // on the static buffer used by ctime()/asctime()
+    char request_time_str[26];
+    char completion_time_str[26];
+    ctime_r(&request_time, request_time_str);
+    ctime_r(&completion_time, completion_time_str);
+    
     fprintf(fp, "============================================\n");
     fprintf(fp, "       LABORATORY ANALYSIS REPORT\n");
     fprintf(fp, "============================================\n\n");
     fprintf(fp, "Patient ID:      %s\n", patient_id);
-    fprintf(fp, "Request Time:    %s", ctime(&request_time));
-    fprintf(fp, "Completion Time: %s", ctime(&completion_time));
+    fprintf(fp, "Request Time:    %s", request_time_str);
+    fprintf(fp, "Completion Time: %s", completion_time_str);
     fprintf(fp, "Tests Performed: %d\n\n", tests_count);
     fprintf(fp, "--------------------------------------------\n");
     fprintf(fp, "                 RESULTS\n");
@@ -550,6 +557,13 @@ static void* lab_worker_thread(void *arg) {
     // Free arguments
     free(args);
     
+    // Decrement active worker count and signal waiting spawners
+    safe_pthread_mutex_lock(&workers_mutex);
+    active_worker_count--;
+    // Always signal - wakes up spawners waiting for capacity OR cleanup waiting for all done
+    safe_pthread_cond_signal(&workers_done_cond);
+    safe_pthread_mutex_unlock(&workers_mutex);
+    
     return NULL;
 }
 
@@ -582,21 +596,39 @@ static int spawn_worker(msg_lab_request_t *request) {
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     
+    // Wait if we're at capacity (MAX_CONCURRENT_TESTS)
+    safe_pthread_mutex_lock(&workers_mutex);
+    while (active_worker_count >= MAX_CONCURRENT_TESTS && !check_shutdown()) {
+        // Use timed wait to check shutdown periodically
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 1;  // 1 second timeout
+        pthread_cond_timedwait(&workers_done_cond, &workers_mutex, &ts);
+    }
+    
+    if (check_shutdown()) {
+        safe_pthread_mutex_unlock(&workers_mutex);
+        free(args);
+        pthread_attr_destroy(&attr);
+        return -1;
+    }
+    
+    // Increment worker count BEFORE creating thread (will be decremented by thread on exit)
+    active_worker_count++;
+    safe_pthread_mutex_unlock(&workers_mutex);
+    
     if (safe_pthread_create(&thread, &attr, lab_worker_thread, args) != 0) {
         log_event(ERROR, "LAB", "THREAD_FAIL", "Failed to create worker thread");
+        // Undo the increment since thread didn't start
+        safe_pthread_mutex_lock(&workers_mutex);
+        active_worker_count--;
+        safe_pthread_mutex_unlock(&workers_mutex);
         free(args);
         pthread_attr_destroy(&attr);
         return -1;
     }
     
     pthread_attr_destroy(&attr);
-    
-    // Track active worker (for potential cleanup)
-    safe_pthread_mutex_lock(&workers_mutex);
-    if (active_worker_count < MAX_CONCURRENT_TESTS) {
-        active_workers[active_worker_count++] = thread;
-    }
-    safe_pthread_mutex_unlock(&workers_mutex);
     
     char log_msg[128];
     snprintf(log_msg, sizeof(log_msg), "Spawned worker for %s (%d tests)",
@@ -687,6 +719,35 @@ void lab_main(void) {
     #endif
     // Run the dispatcher loop
     dispatcher_loop();
+    
+    // Wait for all worker threads to complete (with timeout)
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "LAB", "WAIT_WORKERS", "Waiting for worker threads to complete");
+    #endif
+    safe_pthread_mutex_lock(&workers_mutex);
+    
+    // Use timed wait to avoid blocking forever during shutdown
+    struct timespec ts;
+    int max_wait_seconds = 5; // Maximum 5 seconds to wait for workers
+    
+    while (active_worker_count > 0) {
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 1; // 1 second timeout per iteration
+        
+        int rc = pthread_cond_timedwait(&workers_done_cond, &workers_mutex, &ts);
+        if (rc == ETIMEDOUT) {
+            max_wait_seconds--;
+            if (max_wait_seconds <= 0) {
+                // Timeout expired, force exit - workers will be cleaned up by OS
+                char log_msg[128];
+                snprintf(log_msg, sizeof(log_msg), 
+                         "Timeout waiting for %d workers, forcing cleanup", active_worker_count);
+                log_event(WARNING, "LAB", "WORKER_TIMEOUT", log_msg);
+                break;
+            }
+        }
+    }
+    safe_pthread_mutex_unlock(&workers_mutex);
     
     #ifdef DEBUG
         log_event(DEBUG_LOG, "LAB", "CHILD_CLEANUP", "Calling child_cleanup");

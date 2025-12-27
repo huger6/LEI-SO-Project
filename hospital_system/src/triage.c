@@ -25,7 +25,7 @@
 #define MAX_TREATMENT_THREADS 3
 #define PATIENT_TYPE_EMERGENCY 1
 #define PATIENT_TYPE_APPOINTMENT 2
-#define MAX_WAIT_DEPENDENCIES_TIME 2000
+#define MAX_WAIT_DEPENDENCIES_TIME 8000
 
 // Triage operation ID range: 1000-1999 (Manager uses 2000+)
 #define MIN_TRIAGE_OP_ID 1000
@@ -504,7 +504,10 @@ void *emergency_queue_manager(void *arg) {
         safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
 
         safe_pthread_mutex_unlock(&emergency_queue.mutex);
+
+        safe_pthread_mutex_lock(&treatment_mutex);
         safe_pthread_cond_signal(&patient_ready_cond);
+        safe_pthread_mutex_unlock(&treatment_mutex);
     }
     
     #ifdef DEBUG
@@ -576,7 +579,12 @@ void *appointment_queue_manager(void *arg) {
         safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
 
         safe_pthread_mutex_unlock(&appointment_queue.mutex);
+        
+        // Signal while holding the treatment_mutex to avoid "dubious" helgrind warning
+        // and prevent potential lost wakeups
+        safe_pthread_mutex_lock(&treatment_mutex);
         safe_pthread_cond_signal(&patient_ready_cond);
+        safe_pthread_mutex_unlock(&treatment_mutex);
     }
     
     #ifdef DEBUG
@@ -935,6 +943,26 @@ void triage_main(void) {
         pending_patients_head = next;
     }
     safe_pthread_mutex_unlock(&pending_mutex);
+    
+    // Cleanup emergency queue
+    safe_pthread_mutex_lock(&emergency_queue.mutex);
+    while (emergency_queue.head) {
+        TriagePatient *next = emergency_queue.head->next;
+        free(emergency_queue.head);
+        emergency_queue.head = next;
+    }
+    emergency_queue.count = 0;
+    safe_pthread_mutex_unlock(&emergency_queue.mutex);
+    
+    // Cleanup appointment queue
+    safe_pthread_mutex_lock(&appointment_queue.mutex);
+    while (appointment_queue.head) {
+        TriagePatient *next = appointment_queue.head->next;
+        free(appointment_queue.head);
+        appointment_queue.head = next;
+    }
+    appointment_queue.count = 0;
+    safe_pthread_mutex_unlock(&appointment_queue.mutex);
     
     #ifdef DEBUG
         log_event(DEBUG_LOG, "TRIAGE", "CHILD_CLEANUP", "Calling child_cleanup");
