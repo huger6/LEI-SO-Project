@@ -249,8 +249,16 @@ def generate_appointment(
     
     Syntax: APPOINTMENT <id> init: <int> scheduled: <int> doctor: <type> 
             tests: <list>
+    
+    Note: scheduled_time must be > init_time (validation requirement).
     """
-    scheduled_time = scheduled_time if scheduled_time is not None else init_time + random.randint(50, 200)
+    # Ensure scheduled_time > init_time (command_handler validates: scheduled > current_time + init)
+    if scheduled_time is None:
+        scheduled_time = init_time + random.randint(50, 200)
+    elif scheduled_time <= init_time:
+        # Fix invalid scheduled_time by adding minimum offset
+        scheduled_time = init_time + max(1, random.randint(20, 100))
+    
     doctor = doctor if doctor is not None else random_specialty()
     tests = tests if tests is not None else random_tests(max_count=2, exclude_preop=True)
     
@@ -280,12 +288,31 @@ def generate_surgery(
             urgency: <level> tests: <list> meds: <list>
     
     Note: PREOP test is required for valid surgeries.
+    Note: scheduled_time must be >= init_time.
+    Note: At least 1 medication is required.
     """
     surgery_type = surgery_type if surgery_type is not None else random_specialty()
-    scheduled_time = scheduled_time if scheduled_time is not None else init_time + random.randint(100, 300)
+    
+    # Ensure scheduled_time >= init_time (command_handler validates: scheduled >= init)
+    if scheduled_time is None:
+        scheduled_time = init_time + random.randint(100, 300)
+    elif scheduled_time < init_time:
+        # Fix invalid scheduled_time by adding minimum offset
+        scheduled_time = init_time + random.randint(50, 150)
+    
     urgency = urgency if urgency is not None else random_urgency()
-    tests = tests if tests is not None else random_tests(min_count=1, max_count=3, force_preop=True)
-    meds = meds if meds is not None else random_medications(min_count=1, max_count=4)
+    
+    # Always include PREOP test (required for surgery)
+    if tests is None:
+        tests = random_tests(min_count=1, max_count=3, force_preop=True)
+    elif "PREOP" not in tests:
+        tests = list(tests) + ["PREOP"]
+    
+    # Ensure at least 1 medication (required for surgery)
+    if meds is None:
+        meds = random_medications(min_count=1, max_count=4)
+    elif len(meds) == 0:
+        meds = random_medications(min_count=1, max_count=3)
     
     parts = [
         f"SURGERY {patient_id}",
@@ -311,10 +338,35 @@ def generate_lab_request(
     
     Syntax: LAB_REQUEST <id> init: <int> priority: <level> lab: <LAB1/LAB2/BOTH> 
             tests: <list>
+    
+    Note: Tests must be compatible with lab type:
+      - LAB1: HEMO, GLIC only
+      - LAB2: COLEST, RENAL, HEPAT only  
+      - BOTH: any test including PREOP
     """
     priority = priority if priority is not None else random_lab_priority()
     lab_type = lab_type if lab_type is not None else random_lab_type()
-    tests = tests if tests is not None else random_tests(min_count=1, max_count=3, lab_compatible=lab_type)
+    
+    # Generate or validate tests for lab compatibility
+    if tests is None:
+        tests = random_tests(min_count=1, max_count=3, lab_compatible=lab_type)
+    else:
+        # Validate provided tests are compatible with lab_type
+        if lab_type == "LAB1":
+            valid_tests = [t for t in tests if t in TESTS_LAB1]
+            if not valid_tests:
+                valid_tests = random_tests(min_count=1, max_count=2, lab_compatible="LAB1")
+            tests = valid_tests
+        elif lab_type == "LAB2":
+            valid_tests = [t for t in tests if t in TESTS_LAB2]
+            if not valid_tests:
+                valid_tests = random_tests(min_count=1, max_count=2, lab_compatible="LAB2")
+            tests = valid_tests
+        # BOTH accepts any tests
+    
+    # Ensure at least one test (required)
+    if not tests:
+        tests = random_tests(min_count=1, max_count=2, lab_compatible=lab_type)
     
     parts = [
         f"LAB_REQUEST {lab_id}",
