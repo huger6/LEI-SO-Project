@@ -550,13 +550,21 @@ void handle_command(char *cmd_buf, int current_time) {
             return;
         }
         
-        safe_pthread_mutex_lock(&shm_hospital->shm_pharm->medications[med_id].mutex);
-        shm_hospital->shm_pharm->medications[med_id].current_stock += qty;
-        safe_pthread_mutex_unlock(&shm_hospital->shm_pharm->medications[med_id].mutex);
+        // Send restock message to pharmacy
+        msg_restock_t msg;
+        memset(&msg, 0, sizeof(msg));
+        msg.hdr.mtype = PRIORITY_URGENT;  // Restocks are high priority
+        msg.hdr.kind = MSG_RESTOCK;
+        msg.hdr.timestamp = time(NULL);
+        snprintf(msg.hdr.patient_id, sizeof(msg.hdr.patient_id), "RESTOCK_%s", med_name);
+        msg.med_id = med_id;
+        msg.quantity = qty;
+        
+        send_generic_message(mq_pharmacy_id, &msg, sizeof(msg));
         
         char log_msg[128];
-        snprintf(log_msg, sizeof(log_msg), "Restocked %s with %d units", med_name, qty);
-        log_event(INFO, "MANAGER", "RESTOCK", log_msg);
+        snprintf(log_msg, sizeof(log_msg), "Restock request sent for %s (%d units)", med_name, qty);
+        log_event(INFO, "MANAGER", "RESTOCK_SENT", log_msg);
     }
     else if (strcasecmp(cmd, "HELP") == 0) {
         printf("\n=== HOSPITAL SYSTEM COMMANDS ===\n\n");

@@ -46,6 +46,8 @@ typedef enum {
     MSG_TRANSFER_PATIENT,
     MSG_REJECT_PATIENT,
 
+    MSG_RESTOCK,
+
     MSG_CRITICAL_STATUS,
     MSG_SHUTDOWN
 } message_kind_t;
@@ -138,6 +140,12 @@ typedef struct {
     int severity;
     char description[256];
 } msg_critical_status_t;
+
+typedef struct {
+    msg_header_t hdr;
+    int med_id;
+    int quantity;
+} msg_restock_t;
 
 
 // --- Function Headers ---

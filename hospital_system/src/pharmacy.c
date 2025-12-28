@@ -511,20 +511,52 @@ static int spawn_worker(msg_pharmacy_request_t *request) {
 // --- Dispatcher Loop ---
 
 /**
+ * Handle a restock message - adds stock to the specified medication
+ */
+static void handle_restock(msg_restock_t *restock) {
+    int med_id = restock->med_id;
+    int qty = restock->quantity;
+    
+    if (med_id < 0 || med_id >= config->med_count) {
+        log_event(WARNING, "PHARMACY", "INVALID_RESTOCK", "Invalid medication ID in restock request");
+        return;
+    }
+    
+    safe_pthread_mutex_lock(&shm_hospital->shm_pharm->medications[med_id].mutex);
+    shm_hospital->shm_pharm->medications[med_id].current_stock += qty;
+    safe_pthread_mutex_unlock(&shm_hospital->shm_pharm->medications[med_id].mutex);
+    
+    // Update manual restock stats
+    safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
+    shm_hospital->shm_stats->manual_restocks++;
+    safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
+    
+    char log_msg[128];
+    snprintf(log_msg, sizeof(log_msg), "Restocked %s with %d units", 
+             get_med_name(med_id), qty);
+    log_event(INFO, "PHARMACY", "RESTOCK_COMPLETE", log_msg);
+}
+
+/**
  * Main dispatcher loop for the Pharmacy Process
- * Receives MSG_PHARMACY_REQUEST messages and spawns worker threads
+ * Receives MSG_PHARMACY_REQUEST and MSG_RESTOCK messages
  * Handles priority: URGENT (1) > HIGH (2) > NORMAL (3)
  */
 static void process_pharmacy_requests(void) {
-    msg_pharmacy_request_t request;
+    // Use a union to receive different message types with proper alignment
+    union {
+        msg_pharmacy_request_t pharmacy_req;
+        msg_restock_t restock;
+        msg_header_t hdr;  // For checking message kind
+    } msg_buf;
     
     while (!check_shutdown()) {
         // Clear message buffer
-        memset(&request, 0, sizeof(request));
+        memset(&msg_buf, 0, sizeof(msg_buf));
         
-        // Receive next pharmacy request (blocking with priority)
+        // Receive next pharmacy message (blocking with priority)
         // Using MAX_PRIORITY_TO_ACCEPT: URGENT(1) > HIGH(2) > NORMAL(3)
-        int rc = receive_generic_message(mq_pharmacy_id, &request, sizeof(request), PRIORITY_NORMAL);
+        int rc = receive_generic_message(mq_pharmacy_id, &msg_buf, sizeof(msg_buf), PRIORITY_NORMAL);
         
         if (rc != 0) {
             if (check_shutdown()) break;
@@ -538,23 +570,31 @@ static void process_pharmacy_requests(void) {
         }
         
         // Check for shutdown message
-        if (request.hdr.kind == MSG_SHUTDOWN) {
+        if (msg_buf.hdr.kind == MSG_SHUTDOWN) {
             log_event(INFO, "PHARMACY", "SHUTDOWN_RECV", "Received shutdown signal");
             break;
         }
         
-        // Validate message type
-        if (request.hdr.kind != MSG_PHARMACY_REQUEST) {
+        // Handle restock messages
+        if (msg_buf.hdr.kind == MSG_RESTOCK) {
+            handle_restock(&msg_buf.restock);
+            continue;
+        }
+        
+        // Validate message type for pharmacy requests
+        if (msg_buf.hdr.kind != MSG_PHARMACY_REQUEST) {
             char log_msg[64];
-            snprintf(log_msg, sizeof(log_msg), "Unexpected message kind: %d", request.hdr.kind);
+            snprintf(log_msg, sizeof(log_msg), "Unexpected message kind: %d", msg_buf.hdr.kind);
             log_event(WARNING, "PHARMACY", "INVALID_MSG", log_msg);
             continue;
         }
         
+        msg_pharmacy_request_t *request = &msg_buf.pharmacy_req;
+        
         // Update statistics based on priority
         safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
         shm_hospital->shm_stats->total_pharmacy_requests++;
-        if (request.hdr.mtype == PRIORITY_URGENT) {
+        if (request->hdr.mtype == PRIORITY_URGENT) {
             shm_hospital->shm_stats->urgent_requests++;
         } else {
             shm_hospital->shm_stats->normal_requests++;
@@ -569,11 +609,11 @@ static void process_pharmacy_requests(void) {
         // Log received request
         char log_msg[128];
         snprintf(log_msg, sizeof(log_msg), "Received pharmacy request for %s (%d items, op_id: %d, priority: %ld)",
-                 request.hdr.patient_id, request.meds_count, request.hdr.operation_id, request.hdr.mtype);
+                 request->hdr.patient_id, request->meds_count, request->hdr.operation_id, request->hdr.mtype);
         log_event(INFO, "PHARMACY", "REQUEST_RECV", log_msg);
         
         // Spawn worker thread to handle this request
-        if (spawn_worker(&request) != 0) {
+        if (spawn_worker(request) != 0) {
             log_event(ERROR, "PHARMACY", "SPAWN_FAIL", "Failed to spawn worker for request");
             
             // Decrement active requests on failure
@@ -582,7 +622,7 @@ static void process_pharmacy_requests(void) {
             safe_pthread_mutex_unlock(&shm_hospital->shm_pharm->global_mutex);
             
             // Send failure notification
-            send_pharmacy_notification(request.hdr.patient_id, request.hdr.operation_id, 0, request.sender);
+            send_pharmacy_notification(request->hdr.patient_id, request->hdr.operation_id, 0, request->sender);
         }
     }
 }

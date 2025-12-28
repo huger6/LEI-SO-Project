@@ -39,6 +39,7 @@ typedef struct {
     double total_pharmacy_response_time;
     int stock_depletions; // Stock reached 0
     int auto_restocks;
+    int manual_restocks;
     int medication_usage[15]; 
 
     // --- Labs ---
