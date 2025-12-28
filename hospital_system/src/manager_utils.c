@@ -17,7 +17,7 @@
 #include "../include/config.h"
 #include "../include/mq.h"
 #include "../include/shm.h"
-#include "../include/scheduler.h"
+#include "../include/dispatcher.h"
 #include "../include/safe_threads.h"
 
 extern volatile sig_atomic_t g_shutdown;

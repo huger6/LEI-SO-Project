@@ -1,5 +1,5 @@
-#ifndef SCHEDULER_H
-#define SCHEDULER_H
+#ifndef DISPATCHER_H
+#define DISPATCHER_H
 
 #include <stddef.h>
 

@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../include/scheduler.h"
+#include "../include/dispatcher.h"
 #include "../include/mq.h"
 #include "../include/log.h"
 

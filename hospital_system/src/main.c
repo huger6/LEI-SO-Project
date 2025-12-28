@@ -22,9 +22,7 @@
 #include "../include/log.h"
 #include "../include/console_input.h"
 #include "../include/safe_threads.h"
-
-// New headers
-#include "../include/scheduler.h"
+#include "../include/dispatcher.h"
 #include "../include/command_handler.h"
 #include "../include/manager_utils.h"
 
@@ -62,9 +60,6 @@ pthread_t t_notification_monitor;
 #define MANAGER_OPERATION_ID_BASE 2000
 
 // --- Notification Monitor Thread ---
-// Listens for feedback messages from child processes on mq_responses_id
-// Only receives messages with mtype >= MANAGER_OPERATION_ID_BASE (Manager's own requests)
-// Triage messages (mtype 1000-1002) are received by Triage's dispatcher
 
 void *notification_monitor(void *arg) {
     (void)arg;

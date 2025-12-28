@@ -11,7 +11,7 @@
 #include "../include/shm.h"
 #include "../include/log.h"
 #include "../include/console_input.h"
-#include "../include/scheduler.h"
+#include "../include/dispatcher.h"
 #include "../include/stats.h"
 #include "../include/manager_utils.h"
 #include "../include/safe_threads.h"
