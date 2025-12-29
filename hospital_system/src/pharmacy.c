@@ -285,7 +285,7 @@ static int send_pharmacy_notification(const char *patient_id, int operation_id, 
             target_queue = mq_responses_id;
             target_name = "Manager (responses)";
             // Use a fixed mtype for manager responses
-            response.hdr.mtype = 2002;  // Pharmacy manager responses
+            response.hdr.mtype = 2000;  // Pharmacy manager responses (same as MANAGER_OPERATION_ID_BASE)
             break;
             
         default:
@@ -620,9 +620,6 @@ static void process_pharmacy_requests(void) {
             safe_pthread_mutex_lock(&shm_hospital->shm_pharm->global_mutex);
             shm_hospital->shm_pharm->total_active_requests--;
             safe_pthread_mutex_unlock(&shm_hospital->shm_pharm->global_mutex);
-            
-            // Send failure notification
-            send_pharmacy_notification(request->hdr.patient_id, request->hdr.operation_id, 0, request->sender);
         }
     }
 }

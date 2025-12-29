@@ -201,7 +201,9 @@ int send_generic_message(int mq_id, const void *msg_ptr, size_t total_struct_siz
 
     // The last argument 0 indicates BLOCKING behavior (waits if the queue is full)
     if (msgsnd(mq_id, msg_ptr, payload_size, 0) == -1) {
-        log_event(ERROR, "IPC", "MSG_FAIL", "Failed to send message");
+        char desc[128];
+        snprintf(desc, sizeof(desc), "Failed to send message (PID: %d)", getpid());
+        log_event(ERROR, "IPC", "MSG_FAIL", desc);
         return -1;
     }
     return 0;
@@ -225,6 +227,11 @@ int receive_generic_message(int mq_id, void *msg_buffer, size_t total_struct_siz
     ssize_t result = msgrcv(mq_id, msg_buffer, payload_size, msgtyp_priority, 0);
 
     if (result == -1) {
+        // EIDRM: message queue was removed - trigger graceful shutdown
+        if (errno == EIDRM) {
+            set_shutdown();
+            return -1;
+        }
         // EINTR: signal interruption - not an error
         if (errno != EINTR) {
             log_event(ERROR, "IPC", "MSG_FAIL", "Failed to receive message");
@@ -250,6 +257,11 @@ int receive_specific_message(int mq_id, void *msg_buffer, size_t total_struct_si
     ssize_t result = msgrcv(mq_id, msg_buffer, payload_size, message_type, 0);
 
     if (result == -1) {
+        // EIDRM: message queue was removed - trigger graceful shutdown
+        if (errno == EIDRM) {
+            set_shutdown();
+            return -1;
+        }
         // EINTR: signal interruption - not an error
         if (errno != EINTR) {
             log_event(ERROR, "IPC", "MSG_FAIL", "Failed to receive specific message");
@@ -299,6 +311,11 @@ int receive_message_up_to_type(int mq_id, void *msg_buffer, size_t total_struct_
     ssize_t result = msgrcv(mq_id, msg_buffer, payload_size, -max_type, 0);
 
     if (result == -1) {
+        // EIDRM: message queue was removed - trigger graceful shutdown
+        if (errno == EIDRM) {
+            set_shutdown();
+            return -1;
+        }
         // EINTR: signal interruption - not an error
         if (errno != EINTR) {
             log_event(ERROR, "IPC", "MSG_FAIL", "Failed to receive ranged message");

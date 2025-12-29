@@ -310,8 +310,13 @@ void *response_dispatcher(void *arg) {
         // This uses receive_message_up_to_type which calls msgrcv with negative msgtyp
         // ensuring we only get Triage messages and leave Manager messages (2000+) in the queue
         int result = receive_message_up_to_type(mq_responses_id, &msg, sizeof(msg), MAX_TRIAGE_OP_ID);
-        
+        #ifdef DEBUG
+            log_event(DEBUG_LOG, "TRIAGE", "RESPONSE_DISPATCHER", "Awake");
+        #endif
         if (result == -1) {
+            #ifdef DEBUG
+                log_event(DEBUG_LOG, "TRIAGE", "RESPONSE_DISPATCHER", "Received messaged status -1");
+            #endif
             if (errno == EINTR) continue;
             if (check_shutdown()) break;
             continue;
@@ -319,6 +324,9 @@ void *response_dispatcher(void *arg) {
         
         // Check for shutdown message (shutdown for triage uses priority mtype like PRIORITY_NORMAL=3)
         if (msg.hdr.kind == MSG_SHUTDOWN) {
+            #ifdef DEBUG
+                log_event(DEBUG_LOG, "TRIAGE", "RESPONSE_DISPATCHER", "Received shutdown message");
+            #endif
             break;
         }
         

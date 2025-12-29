@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
@@ -10,6 +11,7 @@
 #include <sys/select.h>
 #include <sys/msg.h>
 #include <time.h>
+#include <pthread.h>
 
 #include "../include/mq.h"
 #include "../include/shm.h"
@@ -79,9 +81,10 @@ void *notification_monitor(void *arg) {
         
         // Use blocking receive - thread will be cancelled via pthread_cancel during shutdown
         // msgrcv is a POSIX cancellation point, so pthread_cancel will interrupt it
-        int result = receive_specific_message(mq_responses_id, &msg, sizeof(msg), 
-                                              MANAGER_OPERATION_ID_BASE);
-        
+        int result = receive_specific_message(mq_responses_id, &msg, sizeof(msg), MANAGER_OPERATION_ID_BASE);
+        #ifdef DEBUG
+            log_event(DEBUG_LOG, "MANAGER", "THREAD_SHUTDOWN", "Received message");
+        #endif
         if (result == -1) {
             if (check_shutdown()) {
                 #ifdef DEBUG
@@ -556,16 +559,34 @@ int main(void) {
         log_event(DEBUG_LOG, "MANAGER", "THREAD_CANCEL", "Cancelling notification monitor thread");
     #endif
     
-    // Wait for the notification monitor thread to finish
+    // Wait for the notification monitor thread with timeout
+    // Use pthread_timedjoin_np if available, otherwise use pthread_cancel as fallback
     #ifdef DEBUG
         log_event(DEBUG_LOG, "MANAGER", "THREAD_JOIN", "Waiting for notification monitor thread to join");
     #endif
-    safe_pthread_join(t_notification_monitor, NULL);
+    
+    // Try timed join first (2 seconds timeout)
+    struct timespec join_timeout;
+    clock_gettime(CLOCK_REALTIME, &join_timeout);
+    join_timeout.tv_sec += 2;
+    
+    int join_result = pthread_timedjoin_np(t_notification_monitor, NULL, &join_timeout);
+    if (join_result == ETIMEDOUT) {
+        // Thread didn't exit in time, force cancel
+        #ifdef DEBUG
+            log_event(DEBUG_LOG, "MANAGER", "THREAD_CANCEL_FORCE", "Thread join timed out, forcing cancel");
+        #endif
+        pthread_cancel(t_notification_monitor);
+        pthread_join(t_notification_monitor, NULL);
+    }
+    
     #ifdef DEBUG
         log_event(DEBUG_LOG, "MANAGER", "THREAD_JOINED", "Notification monitor thread joined");
     #endif
     
     manager_cleanup();
+
+    log_event(INFO, "SYSTEM", "SHUTDOWN", "Shutdown was successful. Goodbye!");
 
     return 0;
 }
