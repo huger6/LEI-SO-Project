@@ -89,6 +89,8 @@ typedef struct {
 static int next_pending_op_id = MIN_TRIAGE_OP_ID;
 static pthread_mutex_t pending_op_id_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+static int pending_patients_count = 0;
+
 // --- Globals ---
 
 // Queues
@@ -513,7 +515,9 @@ void *emergency_queue_manager(void *arg) {
 
         safe_pthread_mutex_unlock(&emergency_queue.mutex);
 
+        // Increment pending work counter and signal workers
         safe_pthread_mutex_lock(&treatment_mutex);
+        pending_patients_count++;
         safe_pthread_cond_signal(&patient_ready_cond);
         safe_pthread_mutex_unlock(&treatment_mutex);
     }
@@ -588,9 +592,9 @@ void *appointment_queue_manager(void *arg) {
 
         safe_pthread_mutex_unlock(&appointment_queue.mutex);
         
-        // Signal while holding the treatment_mutex to avoid "dubious" helgrind warning
-        // and prevent potential lost wakeups
+        // Increment pending work counter and signal workers
         safe_pthread_mutex_lock(&treatment_mutex);
+        pending_patients_count++;
         safe_pthread_cond_signal(&patient_ready_cond);
         safe_pthread_mutex_unlock(&treatment_mutex);
     }
@@ -712,7 +716,8 @@ void *treatment_worker(void *arg) {
         TriagePatient *p = NULL;
         
         safe_pthread_mutex_lock(&treatment_mutex);
-        while ((emergency_queue.head == NULL && appointment_queue.head == NULL) && !check_shutdown()) {
+        // Wait until there is pending work or shutdown is requested
+        while (pending_patients_count == 0 && !check_shutdown()) {
             safe_pthread_cond_wait(&patient_ready_cond, &treatment_mutex);
         }
         
@@ -721,6 +726,11 @@ void *treatment_worker(void *arg) {
             break;
         }
         
+        // Claim work by decrementing the counter while holding treatment_mutex
+        pending_patients_count--;
+        safe_pthread_mutex_unlock(&treatment_mutex);
+        
+        // Now acquire queue mutexes to get the actual patient
         if (is_appointment_specialist) {
             // Appointment Specialist: Try Appointment Queue first
             safe_pthread_mutex_lock(&appointment_queue.mutex);
@@ -764,10 +774,12 @@ void *treatment_worker(void *arg) {
         }
         
         if (!p) {
-            safe_pthread_mutex_unlock(&treatment_mutex);
+            // Counter was decremented but no patient found (rare race with vital_monitor removing patients)
+            // Just continue to next iteration
             continue;
         }
         
+        safe_pthread_mutex_lock(&treatment_mutex);
         active_treatments++;
         safe_pthread_mutex_unlock(&treatment_mutex);
         

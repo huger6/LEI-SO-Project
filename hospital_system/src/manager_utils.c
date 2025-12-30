@@ -85,9 +85,18 @@ static void generic_signal_handler(int sig) {
 }
 
 // Handler for child processes (no SA_RESTART)
+// Writes SIGINT to manager's signal pipe to trigger graceful shutdown
+// Also sets local g_shutdown to interrupt blocking calls in this child
 static void child_signal_handler(int sig) {
-    (void)sig;
-    g_shutdown = 1;
+    // Set local flag to interrupt blocking calls (msgrcv, etc.)
+    // g_shutdown = 1;
+    
+    // Forward SIGINT to manager via inherited signal pipe
+    // This triggers the manager to initiate proper graceful shutdown
+    // SIGTERM comes from manager so no need to forward it back
+    if (sig == SIGINT) {
+        notify_signal(SIGINT);
+    }
 }
 
 // Setup all signal handlers
@@ -117,7 +126,7 @@ void setup_child_signals(void) {
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    // User defined signals
+    // User defined signals - ignored in children
     sa.sa_handler = SIG_IGN;
 
     sigaction(SIGUSR1, &sa, NULL);
