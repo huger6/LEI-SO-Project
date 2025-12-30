@@ -705,7 +705,8 @@ void *treatment_worker(void *arg) {
     int thread_id = *(int*)arg;
     free(arg);
     
-    (void)thread_id;  // Not used in new pending-based system
+    // Thread 2 is the "Appointment Specialist", Threads 0 and 1 are "General/Emergency Workers"
+    int is_appointment_specialist = (thread_id == 2);
     
     while (!check_shutdown()) {
         TriagePatient *p = NULL;
@@ -720,17 +721,8 @@ void *treatment_worker(void *arg) {
             break;
         }
         
-        // Try Emergency first
-        safe_pthread_mutex_lock(&emergency_queue.mutex);
-        if (emergency_queue.head) {
-            p = emergency_queue.head;
-            emergency_queue.head = p->next;
-            emergency_queue.count--;
-        }
-        safe_pthread_mutex_unlock(&emergency_queue.mutex);
-        
-        // If no emergency, try Appointment
-        if (!p) {
+        if (is_appointment_specialist) {
+            // Appointment Specialist: Try Appointment Queue first
             safe_pthread_mutex_lock(&appointment_queue.mutex);
             if (appointment_queue.head) {
                 p = appointment_queue.head;
@@ -738,6 +730,37 @@ void *treatment_worker(void *arg) {
                 appointment_queue.count--;
             }
             safe_pthread_mutex_unlock(&appointment_queue.mutex);
+            
+            // Fallback to Emergency Queue if Appointment Queue is empty
+            if (!p) {
+                safe_pthread_mutex_lock(&emergency_queue.mutex);
+                if (emergency_queue.head) {
+                    p = emergency_queue.head;
+                    emergency_queue.head = p->next;
+                    emergency_queue.count--;
+                }
+                safe_pthread_mutex_unlock(&emergency_queue.mutex);
+            }
+        } else {
+            // General/Emergency Workers: Try Emergency Queue first
+            safe_pthread_mutex_lock(&emergency_queue.mutex);
+            if (emergency_queue.head) {
+                p = emergency_queue.head;
+                emergency_queue.head = p->next;
+                emergency_queue.count--;
+            }
+            safe_pthread_mutex_unlock(&emergency_queue.mutex);
+            
+            // Fallback to Appointment Queue if Emergency Queue is empty
+            if (!p) {
+                safe_pthread_mutex_lock(&appointment_queue.mutex);
+                if (appointment_queue.head) {
+                    p = appointment_queue.head;
+                    appointment_queue.head = p->next;
+                    appointment_queue.count--;
+                }
+                safe_pthread_mutex_unlock(&appointment_queue.mutex);
+            }
         }
         
         if (!p) {

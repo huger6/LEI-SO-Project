@@ -327,6 +327,10 @@ void manager_cleanup() {
     #ifdef DEBUG
         log_event(DEBUG_LOG, "SYSTEM", "CLOSE_LOGGING", "Closing logging system");
     #endif
+
+    // We call it here otherwise can't be called (we assume log closes successfully)
+    log_event(INFO, "SYSTEM", "SHUTDOWN", "Shutdown was successful. Goodbye!");
+
     close_logging();
 
     #ifdef DEBUG

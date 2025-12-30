@@ -586,7 +586,5 @@ int main(void) {
     
     manager_cleanup();
 
-    log_event(INFO, "SYSTEM", "SHUTDOWN", "Shutdown was successful. Goodbye!");
-
     return 0;
 }
