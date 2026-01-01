@@ -86,14 +86,16 @@ int init_all_semaphores(void) {
         }
     #endif
 
-    // 3. Laboratory Equipment (LAB1, LAB2)
-    if ((sem_lab1 = _init_single_sem(SEM_NAME_LAB1, VAL_LAB)) == SEM_FAILED) return -1;
-    if ((sem_lab2 = _init_single_sem(SEM_NAME_LAB2, VAL_LAB)) == SEM_FAILED) return -1;
+    // 3. Laboratory Equipment (LAB1, LAB2) - use config values for capacity
+    if ((sem_lab1 = _init_single_sem(SEM_NAME_LAB1, config->max_simultaneous_tests_lab1)) == SEM_FAILED) return -1;
+    if ((sem_lab2 = _init_single_sem(SEM_NAME_LAB2, config->max_simultaneous_tests_lab2)) == SEM_FAILED) return -1;
 
     #ifdef DEBUG
         {
             char dbg[160];
-            snprintf(dbg, sizeof(dbg), "Opened semaphores: LAB1=%p LAB2=%p", (void*)sem_lab1, (void*)sem_lab2);
+            snprintf(dbg, sizeof(dbg), "Opened semaphores: LAB1=%p (capacity=%d) LAB2=%p (capacity=%d)", 
+                     (void*)sem_lab1, config->max_simultaneous_tests_lab1,
+                     (void*)sem_lab2, config->max_simultaneous_tests_lab2);
             log_event(DEBUG_LOG, "IPC", "SEM_OPEN", dbg);
         }
     #endif

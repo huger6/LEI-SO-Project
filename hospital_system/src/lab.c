@@ -34,7 +34,179 @@
 #define TEST_HEPAT      4
 #define TEST_PREOP      5
 
-#define MAX_CONCURRENT_TESTS 200
+// Thread Pool Configuration
+#define LAB_POOL_SIZE   5
+
+// ============================================================================
+// JOB QUEUE IMPLEMENTATION (Thread-Safe Producer-Consumer Queue)
+// ============================================================================
+
+/**
+ * Job structure - contains all data needed to process a lab request
+ */
+typedef struct lab_job {
+    char patient_id[20];
+    int operation_id;
+    int tests_count;
+    int tests_id[5];
+    time_t request_time;
+    msg_sender_t sender;
+    struct lab_job *next;
+} lab_job_t;
+
+/**
+ * Thread-safe job queue with condition variable for blocking
+ */
+typedef struct {
+    lab_job_t *head;
+    lab_job_t *tail;
+    int count;
+    int shutdown;               // Flag to signal workers to exit
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+} job_queue_t;
+
+// Global job queue instance
+static job_queue_t job_queue;
+
+/**
+ * Check if the lab should shutdown (thread-safe)
+ * @return 1 if shutdown is requested, 0 otherwise
+ */
+static int lab_should_shutdown(void) {
+    int val;
+    safe_pthread_mutex_lock(&job_queue.mutex);
+    val = job_queue.shutdown;
+    safe_pthread_mutex_unlock(&job_queue.mutex);
+    return val;
+}
+
+/**
+ * Initialize the job queue
+ */
+static void job_queue_init(job_queue_t *q) {
+    q->head = NULL;
+    q->tail = NULL;
+    q->count = 0;
+    q->shutdown = 0;
+    safe_pthread_mutex_init(&q->mutex, NULL);
+    safe_pthread_cond_init(&q->cond, NULL);
+}
+
+/**
+ * Destroy the job queue and free any remaining jobs
+ */
+static void job_queue_destroy(job_queue_t *q) {
+    safe_pthread_mutex_lock(&q->mutex);
+    
+    // Free any remaining jobs
+    lab_job_t *current = q->head;
+    while (current != NULL) {
+        lab_job_t *next = current->next;
+        free(current);
+        current = next;
+    }
+    q->head = NULL;
+    q->tail = NULL;
+    q->count = 0;
+    
+    safe_pthread_mutex_unlock(&q->mutex);
+    
+    safe_pthread_mutex_destroy(&q->mutex);
+    safe_pthread_cond_destroy(&q->cond);
+}
+
+/**
+ * Push a job onto the queue (producer side)
+ * @return 0 on success, -1 on failure
+ */
+static int job_queue_push(job_queue_t *q, const msg_lab_request_t *request) {
+    lab_job_t *job = malloc(sizeof(lab_job_t));
+    if (!job) {
+        log_event(ERROR, "LAB", "MALLOC_FAIL", "Failed to allocate job");
+        return -1;
+    }
+    
+    // Copy request data into job
+    strncpy(job->patient_id, request->hdr.patient_id, sizeof(job->patient_id) - 1);
+    job->patient_id[sizeof(job->patient_id) - 1] = '\0';
+    job->operation_id = request->hdr.operation_id;
+    job->tests_count = request->tests_count;
+    job->request_time = request->hdr.timestamp;
+    job->sender = request->sender;
+    
+    for (int i = 0; i < request->tests_count && i < 5; i++) {
+        job->tests_id[i] = request->tests_id[i];
+    }
+    job->next = NULL;
+    
+    safe_pthread_mutex_lock(&q->mutex);
+    
+    // Add to tail of queue
+    if (q->tail == NULL) {
+        q->head = job;
+        q->tail = job;
+    } else {
+        q->tail->next = job;
+        q->tail = job;
+    }
+    q->count++;
+    
+    // Signal one waiting worker
+    safe_pthread_cond_signal(&q->cond);
+    
+    safe_pthread_mutex_unlock(&q->mutex);
+    
+    return 0;
+}
+
+/**
+ * Pop a job from the queue (consumer/worker side)
+ * Blocks until a job is available or shutdown is signaled
+ * @return pointer to job on success, NULL if shutdown signaled
+ */
+static lab_job_t* job_queue_pop(job_queue_t *q) {
+    safe_pthread_mutex_lock(&q->mutex);
+    
+    // Wait for a job or shutdown signal
+    // Use regular cond_wait - shutdown will broadcast to wake all waiters
+    while (q->head == NULL && !q->shutdown) {
+        safe_pthread_cond_wait(&q->cond, &q->mutex);
+    }
+    
+    // If shutdown is signaled, exit immediately (don't process remaining jobs)
+    if (q->shutdown) {
+        safe_pthread_mutex_unlock(&q->mutex);
+        return NULL;
+    }
+    
+    // Pop from head of queue
+    lab_job_t *job = q->head;
+    q->head = job->next;
+    if (q->head == NULL) {
+        q->tail = NULL;
+    }
+    q->count--;
+    
+    safe_pthread_mutex_unlock(&q->mutex);
+    
+    return job;
+}
+
+/**
+ * Signal all workers to shutdown
+ */
+static void job_queue_shutdown(job_queue_t *q) {
+    safe_pthread_mutex_lock(&q->mutex);
+    q->shutdown = 1;
+    // Wake up ALL waiting workers so they can exit
+    safe_pthread_cond_broadcast(&q->cond);
+    safe_pthread_mutex_unlock(&q->mutex);
+}
+
+// ============================================================================
+// LAB EQUIPMENT SEMAPHORE FUNCTIONS
+// ============================================================================
 
 /**
  * Acquires a slot for a specific laboratory
@@ -95,22 +267,9 @@ int release_lab_equipment(int lab_id) {
     return sem_post_safe(target_sem, sem_name);
 }
 
-// --- Worker Thread Argument Structure ---
-typedef struct {
-    char patient_id[20];
-    int operation_id;
-    int tests_count;
-    int tests_id[5];
-    time_t request_time;
-    msg_sender_t sender;
-} lab_worker_args_t;
-
-// --- Active Workers Registry ---
-static int active_worker_count = 0;
-static pthread_mutex_t workers_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t workers_done_cond = PTHREAD_COND_INITIALIZER;
-
-// --- Helper Functions ---
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
 
 static const char* get_test_name(int test_id) {
     switch (test_id) {
@@ -295,13 +454,13 @@ static int execute_normal_test(int test_id, const char *patient_id) {
     
     // Acquire lab equipment (semaphore)
     if (acquire_lab_equipment(lab_id) != 0) {
-        if (check_shutdown()) return -1;
+        if (lab_should_shutdown()) return -1;
         log_event(ERROR, "LAB", "SEM_FAIL", "Failed to acquire lab equipment");
         return -1;
     }
     
     // Check shutdown after acquiring
-    if (check_shutdown()) {
+    if (lab_should_shutdown()) {
         release_lab_equipment(lab_id);
         return -1;
     }
@@ -358,12 +517,12 @@ static int execute_preop_test(const char *patient_id) {
     log_event(INFO, "LAB", "PREOP_PHASE1", log_msg);
     
     if (acquire_lab_equipment(LAB1_ID) != 0) {
-        if (check_shutdown()) return -1;
+        if (lab_should_shutdown()) return -1;
         log_event(ERROR, "LAB", "SEM_FAIL", "PREOP: Failed to acquire LAB1");
         return -1;
     }
     
-    if (check_shutdown()) {
+    if (lab_should_shutdown()) {
         release_lab_equipment(LAB1_ID);
         return -1;
     }
@@ -386,19 +545,19 @@ static int execute_preop_test(const char *patient_id) {
     // Release LAB1 before acquiring LAB2
     release_lab_equipment(LAB1_ID);
     
-    if (check_shutdown()) return -1;
+    if (lab_should_shutdown()) return -1;
     
     // --- Phase 2: LAB2 (Biochemistry) ---
     snprintf(log_msg, sizeof(log_msg), "PREOP Phase 2: Acquiring LAB2 for %s", patient_id);
     log_event(INFO, "LAB", "PREOP_PHASE2", log_msg);
     
     if (acquire_lab_equipment(LAB2_ID) != 0) {
-        if (check_shutdown()) return -1;
+        if (lab_should_shutdown()) return -1;
         log_event(ERROR, "LAB", "SEM_FAIL", "PREOP: Failed to acquire LAB2");
         return -1;
     }
     
-    if (check_shutdown()) {
+    if (lab_should_shutdown()) {
         release_lab_equipment(LAB2_ID);
         return -1;
     }
@@ -498,39 +657,47 @@ static int send_results_notification(const char *patient_id, int operation_id, i
     return 0;
 }
 
-// --- Worker Thread Function ---
+// ============================================================================
+// THREAD POOL WORKER FUNCTION
+// ============================================================================
 
 /**
- * Lab Worker Thread: Processes all tests for one request
+ * Worker thread argument (just the worker ID for logging)
  */
-static void* lab_worker_thread(void *arg) {
-    lab_worker_args_t *args = (lab_worker_args_t *)arg;
+typedef struct {
+    int worker_id;
+} worker_thread_args_t;
 
-    args->request_time = time(NULL); /// Correct time (from units to real time)
+/**
+ * Process a single job (patient's lab tests)
+ * This is called by a worker thread for each job it picks up
+ */
+static void process_job(lab_job_t *job, int worker_id) {
+    time_t actual_request_time = time(NULL);  // Real time for turnaround calculation
     
     char log_msg[256];
-    snprintf(log_msg, sizeof(log_msg), "Worker started for %s with %d tests (op_id: %d)",
-             args->patient_id, args->tests_count, args->operation_id);
-    log_event(INFO, "LAB", "WORKER_START", log_msg);
+    snprintf(log_msg, sizeof(log_msg), "Worker %d: Processing request for %s with %d tests (op_id: %d)",
+             worker_id, job->patient_id, job->tests_count, job->operation_id);
+    log_event(INFO, "LAB", "JOB_START", log_msg);
     
     int all_success = 1;
     
     // Process each test in the request
-    for (int i = 0; i < args->tests_count && !check_shutdown(); i++) {
-        int test_id = args->tests_id[i];
+    for (int i = 0; i < job->tests_count && !lab_should_shutdown(); i++) {
+        int test_id = job->tests_id[i];
         int result;
         
         if (test_id == TEST_PREOP) {
             // Special PREOP handling (LAB1 -> LAB2)
-            result = execute_preop_test(args->patient_id);
+            result = execute_preop_test(job->patient_id);
         } else {
             // Normal test (single lab)
-            result = execute_normal_test(test_id, args->patient_id);
+            result = execute_normal_test(test_id, job->patient_id);
         }
         
         if (result != 0) {
             all_success = 0;
-            if (check_shutdown()) break;
+            if (lab_should_shutdown()) break;
         }
     }
     
@@ -538,116 +705,71 @@ static void* lab_worker_thread(void *arg) {
     
     // Update turnaround time statistics
     safe_pthread_mutex_lock(&shm_hospital->shm_stats->mutex);
-    shm_hospital->shm_stats->total_lab_turnaround_time += difftime(completion_time, args->request_time);
+    shm_hospital->shm_stats->total_lab_turnaround_time += difftime(completion_time, actual_request_time);
     safe_pthread_mutex_unlock(&shm_hospital->shm_stats->mutex);
     
-    if (!check_shutdown()) {
+    if (!lab_should_shutdown()) {
         // Generate results file
-        write_results_file(args->patient_id, args->tests_count, args->tests_id,
-                          args->request_time, completion_time);
+        write_results_file(job->patient_id, job->tests_count, job->tests_id,
+                          actual_request_time, completion_time);
         
         // Send notification to surgery/triage (routed based on sender)
-        send_results_notification(args->patient_id, args->operation_id, all_success, args->sender);
+        send_results_notification(job->patient_id, job->operation_id, all_success, job->sender);
     }
     
-    snprintf(log_msg, sizeof(log_msg), "Worker completed for %s (success: %d)",
-             args->patient_id, all_success);
-    log_event(INFO, "LAB", "WORKER_COMPLETE", log_msg);
+    snprintf(log_msg, sizeof(log_msg), "Worker %d: Completed request for %s (success: %d)",
+             worker_id, job->patient_id, all_success);
+    log_event(INFO, "LAB", "JOB_COMPLETE", log_msg);
+}
+
+/**
+ * Thread Pool Worker Function
+ * Runs in a loop taking jobs from the queue until shutdown is signaled
+ */
+static void* pool_worker_thread(void *arg) {
+    worker_thread_args_t *wargs = (worker_thread_args_t *)arg;
+    int worker_id = wargs->worker_id;
+    free(wargs);  // Free the argument struct immediately
     
-    // Free arguments
-    free(args);
+    char log_msg[64];
+    snprintf(log_msg, sizeof(log_msg), "Worker %d started", worker_id);
+    log_event(INFO, "LAB", "WORKER_START", log_msg);
     
-    // Decrement active worker count and signal waiting spawners
-    safe_pthread_mutex_lock(&workers_mutex);
-    active_worker_count--;
-    // Always signal - wakes up spawners waiting for capacity OR cleanup waiting for all done
-    safe_pthread_cond_signal(&workers_done_cond);
-    safe_pthread_mutex_unlock(&workers_mutex);
+    while (1) {
+        // Pop a job from the queue (blocks until job available or shutdown)
+        lab_job_t *job = job_queue_pop(&job_queue);
+        
+        if (job == NULL) {
+            // Shutdown signaled - exit cleanly
+            break;
+        }
+        
+        // Process the job
+        process_job(job, worker_id);
+        
+        // Free the job
+        free(job);
+    }
+    
+    snprintf(log_msg, sizeof(log_msg), "Worker %d exiting", worker_id);
+    log_event(INFO, "LAB", "WORKER_EXIT", log_msg);
     
     return NULL;
 }
 
-/**
- * Spawn a worker thread for a lab request
- */
-static int spawn_worker(msg_lab_request_t *request) {
-    // Allocate worker arguments
-    lab_worker_args_t *args = malloc(sizeof(lab_worker_args_t));
-    if (!args) {
-        log_event(ERROR, "LAB", "MALLOC_FAIL", "Failed to allocate worker args");
-        return -1;
-    }
-    
-    // Copy request data to worker args
-    strncpy(args->patient_id, request->hdr.patient_id, sizeof(args->patient_id) - 1);
-    args->patient_id[sizeof(args->patient_id) - 1] = '\0';
-    args->operation_id = request->hdr.operation_id;
-    args->tests_count = request->tests_count;
-    args->request_time = request->hdr.timestamp;
-    args->sender = request->sender;  // Copy sender for response routing
-    
-    for (int i = 0; i < request->tests_count && i < 5; i++) {
-        args->tests_id[i] = request->tests_id[i];
-    }
-    
-    // Create worker thread (detached)
-    pthread_t thread;
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    
-    // Wait if we're at capacity (MAX_CONCURRENT_TESTS)
-    safe_pthread_mutex_lock(&workers_mutex);
-    while (active_worker_count >= MAX_CONCURRENT_TESTS && !check_shutdown()) {
-        // Use timed wait to check shutdown periodically
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += 1;  // 1 second timeout
-        pthread_cond_timedwait(&workers_done_cond, &workers_mutex, &ts);
-    }
-    
-    if (check_shutdown()) {
-        safe_pthread_mutex_unlock(&workers_mutex);
-        free(args);
-        pthread_attr_destroy(&attr);
-        return -1;
-    }
-    
-    // Increment worker count BEFORE creating thread (will be decremented by thread on exit)
-    active_worker_count++;
-    safe_pthread_mutex_unlock(&workers_mutex);
-    
-    if (safe_pthread_create(&thread, &attr, lab_worker_thread, args) != 0) {
-        log_event(ERROR, "LAB", "THREAD_FAIL", "Failed to create worker thread");
-        // Undo the increment since thread didn't start
-        safe_pthread_mutex_lock(&workers_mutex);
-        active_worker_count--;
-        safe_pthread_mutex_unlock(&workers_mutex);
-        free(args);
-        pthread_attr_destroy(&attr);
-        return -1;
-    }
-    
-    pthread_attr_destroy(&attr);
-    
-    char log_msg[128];
-    snprintf(log_msg, sizeof(log_msg), "Spawned worker for %s (%d tests)",
-             request->hdr.patient_id, request->tests_count);
-    log_event(INFO, "LAB", "WORKER_SPAWNED", log_msg);
-    
-    return 0;
-}
-
-// --- Dispatcher Loop ---
+// ============================================================================
+// DISPATCHER LOOP
+// ============================================================================
 
 /**
  * Main dispatcher loop for the Laboratory Process
- * Receives MSG_LAB_REQUEST messages and spawns worker threads
+ * Receives MSG_LAB_REQUEST messages and pushes them to the job queue
+ * Exits when MSG_SHUTDOWN (poison pill) is received
  */
 static void dispatcher_loop(void) {
     msg_lab_request_t request;
     
-    while (!check_shutdown()) {
+    while (1) {
         // Clear message buffer
         memset(&request, 0, sizeof(request));
         
@@ -656,7 +778,6 @@ static void dispatcher_loop(void) {
         int rc = receive_generic_message(mq_lab_id, &request, sizeof(request), PRIORITY_NORMAL);
         
         if (rc != 0) {
-            if (check_shutdown()) break;
             if (errno == EINTR) continue;  // Interrupted by signal
             
             // Log error but continue
@@ -666,7 +787,7 @@ static void dispatcher_loop(void) {
             continue;
         }
         
-        // Check for shutdown message
+        // Check for shutdown message (poison pill from manager)
         if (request.hdr.kind == MSG_SHUTDOWN) {
             log_event(INFO, "LAB", "SHUTDOWN_RECV", "Received shutdown signal");
             break;
@@ -693,16 +814,18 @@ static void dispatcher_loop(void) {
                  request.hdr.patient_id, request.tests_count, request.hdr.operation_id);
         log_event(INFO, "LAB", "REQUEST_RECV", log_msg);
         
-        // Spawn worker thread to handle this request
-        if (spawn_worker(&request) != 0) {
-            log_event(ERROR, "LAB", "SPAWN_FAIL", "Failed to spawn worker for request");
-            // Send failure notification (using sender from request for proper routing)
+        // Push to job queue for worker threads to process
+        if (job_queue_push(&job_queue, &request) != 0) {
+            log_event(ERROR, "LAB", "QUEUE_FAIL", "Failed to enqueue job");
+            // Send failure notification
             send_results_notification(request.hdr.patient_id, request.hdr.operation_id, 0, request.sender);
         }
     }
 }
 
-// --- Main Entry Point ---
+// ============================================================================
+// MAIN ENTRY POINT
+// ============================================================================
 
 void lab_main(void) {
     #ifdef DEBUG
@@ -714,40 +837,78 @@ void lab_main(void) {
     // Seed random number generator
     srand((unsigned int)(time(NULL) ^ getpid()));
     
+    // Initialize the job queue
+    job_queue_init(&job_queue);
+    
+    // Create the fixed thread pool
+    pthread_t workers[LAB_POOL_SIZE];
+    int workers_created = 0;
+    
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "LAB", "POOL_CREATE", "Creating thread pool");
+    #endif
+    
+    for (int i = 0; i < LAB_POOL_SIZE; i++) {
+        worker_thread_args_t *wargs = malloc(sizeof(worker_thread_args_t));
+        if (!wargs) {
+            log_event(ERROR, "LAB", "MALLOC_FAIL", "Failed to allocate worker args");
+            continue;
+        }
+        wargs->worker_id = i + 1;
+        
+        if (safe_pthread_create(&workers[i], NULL, pool_worker_thread, wargs) != 0) {
+            char log_msg[64];
+            snprintf(log_msg, sizeof(log_msg), "Failed to create worker thread %d", i + 1);
+            log_event(ERROR, "LAB", "THREAD_FAIL", log_msg);
+            free(wargs);
+            continue;
+        }
+        workers_created++;
+    }
+    
+    char log_msg[64];
+    snprintf(log_msg, sizeof(log_msg), "Created %d/%d worker threads", workers_created, LAB_POOL_SIZE);
+    log_event(INFO, "LAB", "POOL_READY", log_msg);
+    
+    if (workers_created == 0) {
+        log_event(ERROR, "LAB", "POOL_FAIL", "No worker threads created, exiting");
+        job_queue_destroy(&job_queue);
+        child_cleanup();
+        exit(EXIT_FAILURE);
+    }
+    
     #ifdef DEBUG
         log_event(DEBUG_LOG, "LAB", "DISPATCHER_START", "Starting lab dispatcher loop");
     #endif
-    // Run the dispatcher loop
+    
+    // Run the dispatcher loop (this blocks until shutdown)
     dispatcher_loop();
     
-    // Wait for all worker threads to complete (with timeout)
+    // --- Shutdown Sequence ---
     #ifdef DEBUG
-        log_event(DEBUG_LOG, "LAB", "WAIT_WORKERS", "Waiting for worker threads to complete");
+        log_event(DEBUG_LOG, "LAB", "SHUTDOWN_START", "Starting shutdown sequence");
     #endif
-    safe_pthread_mutex_lock(&workers_mutex);
     
-    // Use timed wait to avoid blocking forever during shutdown
-    struct timespec ts;
-    int max_wait_seconds = 5; // Maximum 5 seconds to wait for workers
+    // 1. Signal all workers to shutdown
+    job_queue_shutdown(&job_queue);
     
-    while (active_worker_count > 0) {
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += 1; // 1 second timeout per iteration
-        
-        int rc = pthread_cond_timedwait(&workers_done_cond, &workers_mutex, &ts);
-        if (rc == ETIMEDOUT) {
-            max_wait_seconds--;
-            if (max_wait_seconds <= 0) {
-                // Timeout expired, force exit - workers will be cleaned up by OS
-                char log_msg[128];
-                snprintf(log_msg, sizeof(log_msg), 
-                         "Timeout waiting for %d workers, forcing cleanup", active_worker_count);
-                log_event(WARNING, "LAB", "WORKER_TIMEOUT", log_msg);
-                break;
-            }
+    // 2. Wait for all worker threads to join
+    #ifdef DEBUG
+        log_event(DEBUG_LOG, "LAB", "WAIT_WORKERS", "Waiting for worker threads to join");
+    #endif
+    
+    for (int i = 0; i < LAB_POOL_SIZE; i++) {
+        // Only join if thread was successfully created
+        // (pthread_t is initialized to 0 by array initialization)
+        if (workers[i] != 0) {
+            safe_pthread_join(workers[i], NULL);
         }
     }
-    safe_pthread_mutex_unlock(&workers_mutex);
+    
+    log_event(INFO, "LAB", "WORKERS_JOINED", "All worker threads joined");
+    
+    // 3. Cleanup the job queue
+    job_queue_destroy(&job_queue);
     
     #ifdef DEBUG
         log_event(DEBUG_LOG, "LAB", "CHILD_CLEANUP", "Calling child_cleanup");

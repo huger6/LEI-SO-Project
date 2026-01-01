@@ -88,7 +88,7 @@ static void generic_signal_handler(int sig) {
 // Writes SIGINT to manager's signal pipe to trigger graceful shutdown
 // Also sets local g_shutdown to interrupt blocking calls in this child
 static void child_signal_handler(int sig) {
-    // Set local flag to interrupt blocking calls (msgrcv, etc.)
+    // Set local flag to interrupt blocking calls (msgrcv, cond_wait, etc.)
     // g_shutdown = 1;
     
     // Forward SIGINT to manager via inherited signal pipe

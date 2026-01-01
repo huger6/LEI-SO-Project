@@ -572,6 +572,7 @@ static void process_pharmacy_requests(void) {
         // Check for shutdown message
         if (msg_buf.hdr.kind == MSG_SHUTDOWN) {
             log_event(INFO, "PHARMACY", "SHUTDOWN_RECV", "Received shutdown signal");
+            set_shutdown();  // Set flag so workers can check it
             break;
         }
         

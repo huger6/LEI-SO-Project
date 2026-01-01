@@ -105,9 +105,9 @@ void display_statistics_console(global_statistics_shm_t *stats, const char *comp
         avg_time_lab1 = stats->total_lab1_time / stats->total_lab_tests_lab1;
     }
     
-    if (elapsed_seconds > 0) {
-        // Utilization = Occupied time / (Elapsed time * capacity)
-        util_lab1 = (stats->total_lab1_time / ((double)elapsed_seconds * config->max_simultaneous_tests_lab1)) * 100.0;
+    if (sim_time > 0) {
+        // Utilization = Occupied time / (Simulation time * capacity)
+        util_lab1 = (stats->total_lab1_time / (sim_time * config->max_simultaneous_tests_lab1)) * 100.0;
     }
 
     // --- Lab 2 ---
@@ -118,8 +118,9 @@ void display_statistics_console(global_statistics_shm_t *stats, const char *comp
         avg_time_lab2 = stats->total_lab2_time / stats->total_lab_tests_lab2;
     }
     
-    if (elapsed_seconds > 0) {
-        util_lab2 = (stats->total_lab2_time / ((double)elapsed_seconds * config->max_simultaneous_tests_lab2)) * 100.0;
+    if (sim_time > 0) {
+        // Utilization = Occupied time / (Simulation time * capacity)
+        util_lab2 = (stats->total_lab2_time / (sim_time * config->max_simultaneous_tests_lab2)) * 100.0;
     }
 
     // Turnaround
@@ -269,14 +270,14 @@ void save_statistics_snapshot(global_statistics_shm_t *stats) {
     }
     qsort(sorted_meds, 15, sizeof(med_sort_t), compare_meds);
 
-    // Labs
+    // Labs - use simulation time units (same as surgery)
     double util_lab1 = 0.0;
-    if (elapsed_seconds > 0) {
-        util_lab1 = (stats->total_lab1_time / ((double)elapsed_seconds * config->max_simultaneous_tests_lab1)) * 100.0;
+    if (sim_time > 0) {
+        util_lab1 = (stats->total_lab1_time / (sim_time * config->max_simultaneous_tests_lab1)) * 100.0;
     }
     double util_lab2 = 0.0;
-    if (elapsed_seconds > 0) {
-        util_lab2 = (stats->total_lab2_time / ((double)elapsed_seconds * config->max_simultaneous_tests_lab2)) * 100.0;
+    if (sim_time > 0) {
+        util_lab2 = (stats->total_lab2_time / (sim_time * config->max_simultaneous_tests_lab2)) * 100.0;
     }
     int total_lab_tests = stats->total_lab_tests_lab1 + stats->total_lab_tests_lab2;
     double global_lab_avg = (total_lab_tests > 0) ? 
