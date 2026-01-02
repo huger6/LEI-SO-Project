@@ -50,13 +50,14 @@ This project models a hospital as a set of cooperating processes and worker thre
 - **Semaphores** enforce physical constraints (e.g., limited rooms/teams/equipment).
 
 ### Concurrency: POSIX threads (`pthreads`) 🧵
-- Subsystems such as **Laboratory** and **Pharmacy** use detached worker threads to process requests concurrently.
+- **Laboratory** uses a **fixed thread pool** (5 workers by default) with a **producer-consumer job queue**. Workers are joinable and are gracefully shut down when the system terminates.
+- **Pharmacy** uses **detached worker threads** to process requests concurrently.
 - Thread lifecycle is designed for safe shutdown and cleanup.
 
-### Stability: Backpressure / Worker-Cap pattern (high load protection) 🛡️
-- The Laboratory and Pharmacy implement a **maximum concurrency cap** (default **200**) for worker threads.
-- If the subsystem is at capacity, request spawning **waits** until a worker finishes (condition-variable based backpressure).
-- This prevents unbounded thread creation and improves stability under stress.
+### Stability: Thread Pool & Backpressure patterns (high load protection) 🛡️
+- **Laboratory**: Implements a **fixed thread pool** pattern. A dispatcher receives lab requests and enqueues them into a job queue. A fixed number of worker threads consume jobs from the queue, providing natural backpressure when all workers are busy.
+- **Pharmacy**: Implements a **maximum concurrency cap** (default **200**) for worker threads. If the subsystem is at capacity, request spawning **waits** until a worker finishes (condition-variable based backpressure).
+- Both patterns prevent unbounded thread creation and improve stability under stress.
 
 ### Synchronization: mutexes + condition variables ✅
 - Shared counters, queues, and state transitions are guarded via **mutexes**.
@@ -182,9 +183,9 @@ make drd
 ```
 
 ### Detached threads and shutdown cleanup
-- Worker threads in high-throughput modules are **detached**.
+- Pharmacy worker threads are **detached**; Lab uses **joinable** threads in a fixed pool.
 - The system tracks active workers and uses condition-variable signaling to:
-  - prevent spawning beyond the concurrency cap, and
+  - limit concurrency (Pharmacy) or queue depth (Lab), and
   - allow shutdown to wait for workers to finish (with timeouts to avoid deadlocks).
 
 ---
@@ -275,13 +276,14 @@ Este projeto modela um hospital como um conjunto de processos cooperantes e thre
 - **Semáforos** impõem restrições físicas reais (ex.: salas, equipas, equipamentos).
 
 ### Concorrência: POSIX threads (`pthreads`) 🧵
-- Subsistemas como **Laboratório** e **Farmácia** utilizam threads trabalhadoras destacadas (*detached*) para processamento concorrente.  
+- **Laboratório** utiliza um **pool fixo de threads** (5 workers por defeito) com uma **fila de trabalhos produtor-consumidor**. Os workers são *joinable* e são encerrados de forma graciosa quando o sistema termina.
+- **Farmácia** utiliza threads trabalhadoras destacadas (*detached*) para processamento concorrente.
 - O ciclo de vida das threads é desenhado para permitir shutdown e limpeza seguros.
 
-### Estabilidade: Backpressure / padrão Worker-Cap (proteção sob carga elevada) 🛡️
-- O Laboratório e a Farmácia implementam um **limite máximo de concorrência** (por defeito **200**) para threads trabalhadoras.  
-- Quando o subsistema atinge a capacidade máxima, a criação de novas threads **fica em espera** até que uma termine (backpressure com *condition variables*).  
-- Isto evita a criação ilimitada de threads e melhora a estabilidade sob stress.
+### Estabilidade: Padrões Thread Pool & Backpressure (proteção sob carga elevada) 🛡️
+- **Laboratório**: Implementa um padrão de **pool fixo de threads**. Um dispatcher recebe os pedidos e coloca-os numa fila de trabalhos. Um número fixo de threads trabalhadoras consome trabalhos da fila, proporcionando backpressure natural quando todos os workers estão ocupados.
+- **Farmácia**: Implementa um **limite máximo de concorrência** (por defeito **200**) para threads trabalhadoras. Quando o subsistema atinge a capacidade máxima, a criação de novas threads **fica em espera** até que uma termine (backpressure com *condition variables*).
+- Ambos os padrões evitam a criação ilimitada de threads e melhoram a estabilidade sob stress.
 
 ### Sincronização: mutexes + condition variables ✅
 - Contadores partilhados, filas e transições de estado são protegidos por **mutexes**.  
@@ -399,9 +401,9 @@ make drd
 ```
 
 ### Threads detached e limpeza no shutdown
-- Workers em módulos de alto débito são **detached**.
+- Os workers da Farmácia são **detached**; o Laboratório usa threads **joinable** num pool fixo.
 - O sistema mantém contagem de workers e usa condition variables para:
-  - limitar concorrência, e
+  - limitar concorrência (Farmácia) ou profundidade da fila (Laboratório), e
   - coordenar o shutdown de forma segura.
 
 ---
