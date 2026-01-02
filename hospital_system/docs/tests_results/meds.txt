@@ -1,0 +1,20 @@
+============================================
+       PHARMACY DELIVERY RECORD
+============================================
+
+Patient/Request ID: PAC001
+Request Time:       Sat Dec 27 22:48:46 2025
+Delivery Time:      Sat Dec 27 22:48:51 2025
+Items Delivered:    3
+
+--------------------------------------------
+              MEDICATIONS
+--------------------------------------------
+
+  ANTIBIOTICO_FORTE_M   x1
+  INSULINA_K            x1
+  ANTIBIOTICO_B         x1
+
+--------------------------------------------
+Delivery confirmed by Hospital Pharmacy
+============================================
