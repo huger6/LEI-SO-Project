@@ -4,6 +4,8 @@ Note: This file is a mirror of /readme.md file.
 
 A robust, multi-process **Hospital System Simulation** written in **C (Linux)** that showcases core Operating Systems concepts: **process orchestration**, **POSIX threads**, **System V IPC** (Message Queues + Shared Memory + Semaphores), and **signal-driven shutdown**.
 
+## Nota: 18,4
+
 ---
 
 ## 📋 Overview 
